@@ -1,0 +1,14 @@
+{
+  "name": "daikin",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Daikin supplier portal: base app + ASN, Schedule Release and Purchase Order apps",
+  "scripts": {
+    "install:all": "npm install --prefix base-app && npm install --prefix advance-shipment-notes && npm install --prefix schedule-release && npm install --prefix purchase-order",
+    "dev": "concurrently -n base,asn,sr,po -c blue,cyan,green,yellow \"npm run dev --prefix base-app\" \"npm run dev --prefix advance-shipment-notes\" \"npm run dev --prefix schedule-release\" \"npm run dev --prefix purchase-order\"",
+    "build:all": "npm run build --prefix base-app && npm run build --prefix advance-shipment-notes && npm run build --prefix schedule-release && npm run build --prefix purchase-order"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}
