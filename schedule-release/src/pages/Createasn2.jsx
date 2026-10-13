@@ -912,7 +912,23 @@ export default function CreateASN2({ agreement: propAgreement }) {
 
           {/* ─── HEADER STRIP ─── */}
           <div className="bg-white border-b border-[#e5e5e5] px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
-            <h1 className="text-[16px] sm:text-[18px] font-bold text-[#32363a] tracking-tight">Create ASN</h1>
+            <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="w-8 h-8 rounded border-2 border-[#0a6ed1] text-[#0a6ed1] flex items-center justify-center hover:bg-[#ebf5ff] transition-all flex-shrink-0 cursor-pointer"
+            title="Back"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
+
+          {/* Centered Heading */}
+          <div className="sm:absolute sm:left-1/2 sm:transform sm:-translate-x-1/2 text-center select-none">
+            <h1 className="text-[16px] sm:text-[18px] font-bold text-[#0f2d59] tracking-tight whitespace-nowrap">
+              Create ASN
+            </h1>
+          </div>
             <button onClick={handleCreate} disabled={submitting} className="flex items-center gap-2 px-5 h-10 text-[14px] font-semibold text-white bg-[#0a6ed1] rounded-lg hover:bg-[#085caf] hover:scale-[1.02] active:scale-[0.98] transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed">
               {submitting ? <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Creating…</> : <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>Create</>}
             </button>
