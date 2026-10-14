@@ -1,15 +1,17 @@
-import Header from './components/Header.jsx'
-import Footer from './components/Footer.jsx'
+import { AuthProvider, useAuth } from './auth/AuthContext.jsx'
+import LoginPage from './pages/LoginPage.jsx'
 import LandingPage from './pages/LandingPage.jsx'
+
+// Shows the login page until the user signs in, then the portal.
+function Gate() {
+  const { user } = useAuth()
+  return user ? <LandingPage /> : <LoginPage />
+}
 
 export default function App() {
   return (
-    <div className="layout">
-      <Header />
-      <main className="container">
-        <LandingPage />
-      </main>
-      <Footer />
-    </div>
+    <AuthProvider>
+      <Gate />
+    </AuthProvider>
   )
 }
