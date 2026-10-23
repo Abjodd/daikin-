@@ -5,7 +5,7 @@ import CreateASN2 from './pages/Createasn2.jsx'
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/srui">
       <Routes>
         <Route path="/" element={<ScheduleRelease />} />
         <Route path="/sr-lineitem" element={<SRlineitem />} />

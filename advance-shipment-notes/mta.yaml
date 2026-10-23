@@ -1,0 +1,69 @@
+_schema-version: "3.3"
+ID: asn
+version: 1.0.0
+
+modules:
+  - name: asn-ui
+    type: html5
+    path: .
+    build-parameters:
+      builder: custom
+      commands:
+        - npm run build:cf
+      build-result: dist
+      supported-platforms: []
+
+  - name: asn-content
+    type: com.sap.application.content
+    path: .
+    requires:
+      - name: asn-html5-host
+        parameters:
+          content-target: true
+    build-parameters:
+      build-result: resources
+      requires:
+        - name: asn-ui
+          artifacts:
+            - '*.zip'
+          target-path: resources/
+
+  - name: asn-approuter
+    type: approuter.nodejs
+    path: approuter
+    parameters:
+      memory: 256M
+      disk-quota: 256M
+    requires:
+      - name: asn-xsuaa
+      - name: asn-html5-runtime
+
+resources:
+  - name: asn-html5-host
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-plan: app-host
+
+  - name: asn-html5-runtime
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-plan: app-runtime
+
+  - name: asn-xsuaa
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: xs-security.json
+
+parameters:
+  deploy_mode: html5-repo
+  enable-parallel-deployments: true
+
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npm install

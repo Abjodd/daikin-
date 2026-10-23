@@ -1,0 +1,11 @@
+{
+  "_version": "1.12.0",
+  "sap.app": {
+    "id": "baseappui",
+    "type": "application",
+    "title": "Base Application",
+    "applicationVersion": {
+      "version": "1.0.0"
+    }
+  }
+}

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:cf": "vite build && mkdir -p dist-zip && cd dist && bestzip ../dist/srui.zip *",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.2",
+    "bestzip": "^4.0.3",
     "tailwindcss": "^4.3.3",
     "vite": "^8.3.4"
   }
