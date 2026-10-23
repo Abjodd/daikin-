@@ -6,7 +6,8 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss()],
-  server: { port: 5176, strictPort: true },
+  // allowedHosts: lets SAP BAS open the dev server through its port5176-workspaces-… address
+  server: { port: 5176, strictPort: true, allowedHosts: ['.applicationstudio.cloud.sap'] },
   preview: { port: 5176, strictPort: true },
 })
 

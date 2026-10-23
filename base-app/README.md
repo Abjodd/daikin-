@@ -48,4 +48,22 @@ src/
 └── main.jsx
 ```
 
-App URLs are read from `.env` (see `.env.example`); if not set, localhost defaults are used.
+## Where the tiles link to
+
+Start **all four apps together** from the `daikin` folder with `npm run dev`. The tiles
+only open if the other apps are running.
+
+The tile URLs are worked out automatically in `src/config/apps.js`:
+
+| Where the portal runs | Tile opens |
+|---|---|
+| Your laptop (`localhost:5173`) | `localhost:5174` / `5175` / `5176` |
+| SAP BAS (`port5173-workspaces-…`) | `port5174-workspaces-…` etc. |
+| Deployed portal (`npm run build`) | the URLs in **`base-app/.env.production`** |
+| Local, with a URL in `base-app/.env` | that URL |
+
+**Changing the deployed links:** edit `base-app/.env.production`, then rebuild and redeploy
+the portal. An app with an empty line shows as "Not deployed yet".
+
+**Local portal → deployed app:** copy `.env.example` to `.env`, fill in the URL and
+**restart** `npm run dev`.

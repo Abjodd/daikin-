@@ -3,9 +3,10 @@ import PurchaseOrder from './pages/PurchaseOrder.jsx'
 import POlineitem from './pages/POlineitem.jsx'
 import CreateASN from './pages/createASN.jsx'
 
+// On BTP the app is served under /purchaseorderui; locally (npm run dev) it's at /
 export default function App() {
   return (
-    <BrowserRouter basename='/purchaseorderui'>
+    <BrowserRouter basename={import.meta.env.PROD ? '/purchaseorderui' : '/'}>
       <Routes>
         <Route path="/" element={<PurchaseOrder />} />
         <Route path="/po-lineitem" element={<POlineitem />} />

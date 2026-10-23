@@ -66,12 +66,16 @@ export default function LandingPage() {
             </div>
           </div>
           <div className="hero-cta">
-            <a className="btn-light" href={APPS[0].url}>
-              <Icon name="truck" size={18} /> Create ASN
-            </a>
-            <a className="btn-ghost" href={APPS[2].url}>
-              View purchase orders
-            </a>
+            {APPS[0].url && (
+              <a className="btn-light" href={APPS[0].url}>
+                <Icon name="truck" size={18} /> Create ASN
+              </a>
+            )}
+            {APPS[2].url && (
+              <a className="btn-ghost" href={APPS[2].url}>
+                View purchase orders
+              </a>
+            )}
           </div>
         </section>
 

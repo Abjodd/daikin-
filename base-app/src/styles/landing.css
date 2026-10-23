@@ -150,6 +150,10 @@ html { scroll-padding-top: 96px; }
 }
 .tile:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); border-color: transparent; }
 .tile:hover::before { opacity: 1; }
+.tile--disabled { cursor: default; opacity: .7; }
+.tile--disabled:hover { transform: none; box-shadow: var(--shadow-sm); border-color: var(--line); }
+.tile--disabled:hover::before { opacity: 0; }
+.tile-soon { font-size: 13px; font-weight: 700; color: var(--subtle); background: var(--bg); padding: 6px 12px; border-radius: 999px; }
 .tile-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; }
 .tile-icon { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 16px; background: var(--tint); color: var(--accent); }
 .tile-code { font-size: 12px; font-weight: 800; letter-spacing: .08em; color: var(--accent); background: var(--tint); padding: 5px 10px; border-radius: 999px; }
