@@ -1,0 +1,69 @@
+_schema-version: "3.3"
+ID: purchase-order
+version: 1.0.0
+
+modules:
+  - name: purchase-order-ui
+    type: html5
+    path: .
+    build-parameters:
+      builder: custom
+      commands:
+        - npm run build:cf
+      build-result: dist
+      supported-platforms: []
+
+  - name: purchase-order-content
+    type: com.sap.application.content
+    path: .
+    requires:
+      - name: purchase-order-html5-host
+        parameters:
+          content-target: true
+    build-parameters:
+      build-result: resources
+      requires:
+        - name: purchase-order-ui
+          artifacts:
+            - '*.zip'
+          target-path: resources/
+
+  - name: purchase-order-approuter
+    type: approuter.nodejs
+    path: approuter
+    parameters:
+      memory: 256M
+      disk-quota: 256M
+    requires:
+      - name: purchase-order-xsuaa
+      - name: purchase-order-html5-runtime
+
+resources:
+  - name: purchase-order-html5-host
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-plan: app-host
+
+  - name: purchase-order-html5-runtime
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-plan: app-runtime
+
+  - name: purchase-order-xsuaa
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: xs-security.json
+
+parameters:
+  deploy_mode: html5-repo
+  enable-parallel-deployments: true
+
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npm install

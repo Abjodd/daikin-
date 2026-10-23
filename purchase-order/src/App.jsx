@@ -5,7 +5,7 @@ import CreateASN from './pages/createASN.jsx'
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename='/purchaseorderui'>
       <Routes>
         <Route path="/" element={<PurchaseOrder />} />
         <Route path="/po-lineitem" element={<POlineitem />} />

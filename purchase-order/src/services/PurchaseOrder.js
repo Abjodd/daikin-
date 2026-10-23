@@ -2,9 +2,9 @@
  * Purchase Order API Service
  * Set USE_MOCK to false once live SAP OData service is connected.
  */
-export const USE_MOCK = true
+export const USE_MOCK = false
 
-const BASE = '/sap/opu/odata/shiv/NW_SUPP_PORTAL_PO_APP_SRV'
+const BASE = 'https://my444263.s4hana.cloud.sap/sap/opu/odata/sap/ZSB_PURCAHSE'
 
 export function sapDateToDisplay(s) {
   if (!s || s === '00000000') return ''
@@ -330,112 +330,177 @@ async function odataGet(path) {
   return json.d
 }
 
+function sapODataDate(value) {
+  if (!value) return ''
+
+  const match = /\/Date\((\d+)\)\//.exec(value)
+
+  if (!match) return value
+
+  const date = new Date(Number(match[1]))
+
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: '2-digit',
+    year: 'numeric'
+  })
+}
+
 function mapHeader(raw) {
   return {
-    id:                   str(raw.Po_No),
-    poNo:                 str(raw.Po_No),
-    plant:                str(raw.Plant),
-    plantName:            str(raw.Plant_Desc),
-    date:                 sapDateToDisplay(raw.Po_Date),
-    type:                 str(raw.UpdatedBy) || 'Manual',
-    vendor:               str(raw.Vendor_Name),
-    vendorNo:             str(raw.Vendor_No),
-    currency:             str(raw.Currency),
-    amount:               str(raw.Amount),
-    status:               str(raw.Status),
-    buyerName:            str(raw.Buyer_Name),
-    purchaseOrg:          str(raw.Purchase_Org),
-    purchaseOrgDesc:      str(raw.Purchase_Org_Desc),
-    purchaseGroup:        str(raw.Purchase_Group),
-    purchaseGroupDesc:    str(raw.Purchase_Group_Desc),
-    orderType:            str(raw.Order_Type),
-    orderTypeDesc:        str(raw.Order_Type_Desc),
-    itemCount:            str(raw.Item_Count),
-    upcomingDelDate:      sapDateToDisplay(raw.Upcoming_Del_Date),
-    validFrom:            sapDateToDisplay(raw.ValidFrom),
-    validTo:              sapDateToDisplay(raw.ValidTo),
-    poType:               str(raw.PoType),
-    poFlag:               str(raw.Po_Flag),
-    asnFlag:              str(raw.Asn_Flag),
+    id: str(raw.PurchaseOrder),
+
+    poNo: str(raw.PurchaseOrder),
+
+    plant: str(raw.SupplyingPlant),
+
+    plantName: str(raw.SupplyingPlant),
+
+    date: sapODataDate(raw.PurchaseOrderDate),
+
+    type: str(raw.PurchaseOrderType),
+
+    vendor: str(raw.Supplier),
+
+    vendorNo: str(raw.Supplier),
+
+    currency: 'INR',
+
+    amount: '',
+
+    status: str(raw.PurchaseOrderType),
+
+    buyerName: str(raw.CreatedByUser),
+
+    purchaseOrg: str(raw.PurchasingOrganization),
+
+    purchaseOrgDesc: '',
+
+    purchaseGroup: str(raw.PurchasingGroup),
+
+    purchaseGroupDesc: '',
+
+    orderType: str(raw.PurchaseOrderType),
+
+    orderTypeDesc: '',
+
+    itemCount: '0',
+
+    upcomingDelDate: '',
+
+    validFrom: sapODataDate(raw.CreationDate),
+
+    validTo: '',
+
+    poType: str(raw.PurchaseOrderType),
+
+    poFlag: '',
+
+    asnFlag: ''
   }
 }
-
 function mapPoItem(raw) {
-  const rawStatus = str(raw.Confirm_Status)
-  let status = rawStatus
-  if (!rawStatus || rawStatus === '') {
-    status = 'Confirmation Required'
-  }
-  if (!['Confirmed', 'Partially Confirmed', 'Confirmation Required', 'Completed'].includes(rawStatus)) {
-    status = rawStatus || 'Confirmation Required'
-  }
-
   return {
-    poNo:             str(raw.Po_No),
-    itemNo:           str(raw.Item_No)?.replace(/^0+/, '') || str(raw.Item_No),
-    ebelp:            str(raw.Item_No),
-    materialNumber:   str(raw.Material_No),
-    materialName:     str(raw.Material_Desc),
-    hsnCode:          str(raw.Hsn_Code),
-    poQty:            trimNum(raw.Quantity),
-    confirmQty:       trimNum(raw.Confirm_Qty),
-    deliveredQty:     trimNum(raw.Delivered_Qty),
-    unitPrice:        trimNum(raw.Total_Amount),
-    status,
-    deliveryUnit:     str(raw.Uom) || 'NO',
-    deliverySchedule: trimNum(raw.Quantity),
-    deliveryDate:     sapDateToDisplay(raw.Delivery_Date),
-    plant:            str(raw.Plant),
-    plantDesc:        str(raw.Plant_Desc),
-    totalAmount:      str(raw.Total_Amount),
-    currency:         str(raw.Currency) || 'INR',
-    igst:             str(raw.Igst),
-    cgst:             str(raw.Cgst),
-    sgst:             str(raw.Sgst),
-    asnCreated:       trimNum(raw.Asn_Created),
-    pendingQty:       trimNum(raw.Pending_Qty),
-    storageLocation:  str(raw.StorageLocation) || 'RM02',
-    warehouseNo:      str(raw.Warehouse_No) || 'W01',
-    matkl:            str(raw.Matkl),
-    wgbez:            str(raw.Wgbez),
-    pkgMatQty:        str(raw.PkgMatQty) || '1',
-    pkgMatType:       str(raw.PkgMatType) || 'Corrugated Box',
-    soq:              str(raw.SOQ) || '50',
-    itemIndicator:    str(raw.Item_indicator),
-    scheduleItem:     str(raw.ScheduleItem),
-    viewName:         str(raw.ViewName),
-    scheduleLines:    [],
+    poNo: str(raw.PurchaseOrder),
+
+    itemNo: str(raw.PurchaseOrderItem),
+
+    ebelp: str(raw.PurchaseOrderItem),
+
+    materialNumber: str(raw.Material),
+
+    materialName: str(raw.PurchaseOrderItemText),
+
+    hsnCode: str(raw.CommodityCode),
+
+    poQty: trimNum(raw.OrderQuantity),
+
+    confirmQty: trimNum(raw.PurgDocReleaseOrderQuantity),
+
+    deliveredQty: trimNum(raw.StockTransferDeliveredQuantity),
+
+    unitPrice: trimNum(raw.NetPriceAmount),
+
+    totalAmount: trimNum(raw.NetAmount),
+
+    currency: str(raw.DocumentCurrency),
+
+    deliveryUnit: str(raw.PurchaseOrderQuantityUnit),
+
+    storageLocation: str(raw.StorageLocation),
+
+    plant: str(raw.Plant),
+
+    plantDesc: str(raw.Plant),
+
+    pendingQty: trimNum(raw.OrderQuantity),
+
+    status:
+      raw.IsCompletelyDelivered
+        ? 'Completed'
+        : raw.PurgItemIsBlockedForDelivery
+        ? 'Blocked'
+        : raw.PurgDocReleaseOrderQuantity > 0
+        ? 'Partially Confirmed'
+        : 'Confirmation Required',
+
+    deliveryDate: raw.GoodsReceiptLatestCreationDate
+      ? sapDateToDisplay(raw.GoodsReceiptLatestCreationDate)
+      : '',
+
+    warehouseNo: '',
+
+    igst: '',
+    cgst: '',
+    sgst: '',
+
+    asnCreated: '0.00',
+
+    scheduleLines: [],
   }
 }
 
-function mapPoDetail(raw) {
+function mapPoDetail(header, items = []) {
   return {
-    id:                   str(raw.Po_No),
-    poNo:                 str(raw.Po_No),
-    vendorNo:             str(raw.Vendor_No),
-    vendor:               str(raw.Vendor_Name),
-    date:                 sapDateToDisplay(raw.Po_Date),
-    plant:                str(raw.Plant),
-    plantDesc:            str(raw.Plant_Desc),
-    currency:             str(raw.Currency) || 'INR',
-    amount:               str(raw.Amount),
-    buyerName:            str(raw.Buyer_Name),
-    purchaseOrg:          str(raw.Purchase_Org),
-    purchaseOrgDesc:      str(raw.Purchase_Org_Desc),
-    purchaseGroup:        str(raw.Purchase_Group),
-    purchaseGroupDesc:    str(raw.Purchase_Group_Desc),
-    orderType:            str(raw.Order_Type),
-    orderTypeDesc:        str(raw.Order_Type_Desc),
-    status:               str(raw.Status),
-    itemCount:            str(raw.Item_Count),
-    upcomingDelDate:      sapDateToDisplay(raw.Upcoming_Del_Date),
-    poType:               str(raw.PoType),
-    poFlag:               str(raw.Po_Flag),
-    asnFlag:              str(raw.Asn_Flag),
-    items: (raw.headertoitemNav?.results || []).map(mapPoItem),
+    id: str(header.PurchaseOrder),
+
+    poNo: str(header.PurchaseOrder),
+
+    vendorNo: str(header.Supplier),
+
+    vendor: str(header.Supplier),
+
+    date: sapODataDate(header.PurchaseOrderDate),
+
+    plant: str(header.SupplyingPlant),
+
+    plantDesc: str(header.SupplyingPlant),
+
+    buyerName: str(header.CreatedByUser),
+
+    purchaseOrg: str(header.PurchasingOrganization),
+
+    purchaseGroup: str(header.PurchasingGroup),
+
+    orderType: str(header.PurchaseOrderType),
+
+    status: str(header.PurchaseOrderType),
+
+    itemCount: String(items.length),
+
+    currency: 'INR',
+
+    amount: items
+      .reduce(
+        (sum, item) =>
+          sum + Number(item.NetAmount || 0),
+        0
+      )
+      .toFixed(2),
+
+    items: items.map(mapPoItem)
   }
 }
-
 function mapConfirmRow(raw) {
   return {
     poNo:            str(raw.Po_No),
@@ -488,45 +553,60 @@ function mapPdirRef(raw) {
 
 export const purchaseOrderApi = {
   async fetchAllSuppliers() {
-    if (USE_MOCK) {
-      return [
-        { lifnr: 'V-100234', name: 'Kunstocom(India) Ltd' },
-        { lifnr: 'V-100588', name: 'Precision Coils Ltd' },
-        { lifnr: 'V-100720', name: 'Sri Ram Plastics' },
-      ]
+
+  const res = await fetch(
+    `${BASE}/ZCDS_PURCHASE_HEADER?$format=json`,
+    {
+      headers: {
+        Accept: 'application/json'
+      },
+      credentials: 'include'
     }
-    try {
-      const res = await fetch(`/sap/opu/odata/sap/ZSCHEDULE_GENERATE_SRV/f4supplierSet?$format=json`, {
-        headers: { Accept: 'application/json' },
-        credentials: 'include',
-      })
-      if (!res.ok) throw new Error('Failed to load suppliers')
-      const json = await res.json()
-      return (json.d?.results || []).map(d => ({ lifnr: d.lifnr, name: d.name }))
-    } catch {
-      return [
-        { lifnr: 'V-100234', name: 'Kunstocom(India) Ltd' },
-        { lifnr: 'V-100588', name: 'Precision Coils Ltd' },
-        { lifnr: 'V-100720', name: 'Sri Ram Plastics' },
-      ]
-    }
-  },
+  )
+
+  if (!res.ok) {
+    throw new Error('Failed to load suppliers')
+  }
+
+  const json = await res.json()
+
+  return [
+    ...new Map(
+      (json.d?.results || []).map(item => [
+        item.Supplier,
+        {
+          lifnr: item.Supplier,
+          name: item.Supplier
+        }
+      ])
+    ).values()
+  ]
+},
 
   async listHeaders({ vendorNo = '' } = {}) {
-    if (USE_MOCK) {
-      let list = MOCK_PO_HEADERS
-      if (vendorNo) {
-        list = list.filter(h => h.Vendor_No === vendorNo)
-      }
-      return list.map(mapHeader)
-    }
 
-    const filter = vendorNo
-      ? `?$filter=Vendor_No%20eq%20%27${encodeURIComponent(vendorNo)}%27`
-      : '?$skip=0&$top=40'
-    const data = await odataGet(`/PO_HEADERSet${filter}`)
-    return (data.results || []).map(mapHeader)
-  },
+  let url =
+    `${BASE}/ZCDS_PURCHASE_HEADER?$format=json`
+
+  if (vendorNo) {
+    url += `&$filter=Supplier eq '${vendorNo}'`
+  }
+
+  const res = await fetch(url, {
+    headers: {
+      Accept: 'application/json'
+    },
+    credentials: 'include'
+  })
+
+  if (!res.ok) {
+    throw new Error('Failed to load purchase orders')
+  }
+
+  const json = await res.json()
+
+  return (json.d?.results || []).map(mapHeader)
+},
 
   async getHeader(poNo, vendorNo = '') {
     if (USE_MOCK) {
@@ -539,17 +619,48 @@ export const purchaseOrderApi = {
     return mapHeader(data)
   },
 
-  async getPoDetail(poNo, vendorNo = '') {
-    if (USE_MOCK) {
-      const rawHead = MOCK_PO_HEADERS.find(h => h.Po_No === poNo) || MOCK_PO_HEADERS[0]
-      const items = MOCK_PO_ITEMS[poNo] || MOCK_PO_ITEMS['7000037175'] || []
-      return mapPoDetail({ ...rawHead, headertoitemNav: { results: items } })
-    }
+  async getPoDetail(poNo) {
 
-    const key = `Po_No='${poNo}',Vendor_No='${vendorNo}'`
-    const data = await odataGet(`/PO_HEADERSet(${key})?$expand=headertoitemNav`)
-    return mapPoDetail(data)
-  },
+  const [headerRes, itemRes] = await Promise.all([
+    fetch(
+      `${BASE}/ZCDS_PURCHASE_HEADER?$filter=PurchaseOrder eq '${poNo}'&$format=json`,
+      {
+        headers: {
+          Accept: 'application/json'
+        },
+        credentials: 'include'
+      }
+    ),
+
+    fetch(
+      `${BASE}/ZCDS_PURCHASEITEM?$filter=PurchaseOrder eq '${poNo}'&$format=json`,
+      {
+        headers: {
+          Accept: 'application/json'
+        },
+        credentials: 'include'
+      }
+    )
+  ])
+
+  if (!headerRes.ok || !itemRes.ok) {
+    throw new Error('Failed to load PO details')
+  }
+
+  const headerJson = await headerRes.json()
+  const itemJson = await itemRes.json()
+
+  const header = headerJson.d?.results?.[0]
+
+  if (!header) {
+    throw new Error('PO not found')
+  }
+
+  return mapPoDetail(
+    header,
+    itemJson.d?.results || []
+  )
+},
 
   async getLineItems(poNo, ebelp) {
     if (USE_MOCK) {
