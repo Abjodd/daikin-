@@ -1,8 +1,14 @@
-
 {
   "welcomeFile": "/purchaseorderui/index.html",
   "authenticationMethod": "route",
   "routes": [
+    {
+      "source": "^/sap/opu/odata/(.*)$",
+      "target": "/sap/opu/odata/$1",
+      "destination": "Supplier-Portal",
+      "authenticationType": "xsuaa",
+      "csrfProtection": false
+    },
     {
       "source": "^(.*)$",
       "target": "$1",

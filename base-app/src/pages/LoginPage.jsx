@@ -32,7 +32,7 @@ export default function LoginPage() {
       {/* ── Brand panel ── */}
       <aside className="login-brand">
         <div className="login-brand-top">
-          <span className="wordmark wordmark--light">DAIKIN</span>
+          <span className="wordmark wordmark--light">DEMO</span>
           <span className="login-brand-tag">Supplier Portal</span>
         </div>
 

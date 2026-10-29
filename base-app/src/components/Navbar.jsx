@@ -13,7 +13,7 @@ export default function Navbar({ active, onNavigate }) {
     <header className="topbar">
       <div className="container topbar-inner">
         <a href="#overview" className="brand" onClick={(e) => { e.preventDefault(); onNavigate('overview') }}>
-          <span className="wordmark">DAIKIN</span>
+          <span className="wordmark">DEMO</span>
           <span className="brand-sub">Supplier Portal</span>
         </a>
 

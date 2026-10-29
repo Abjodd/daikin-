@@ -4,7 +4,7 @@
  */
 export const USE_MOCK = false
 
-const BASE = 'https://my444263.s4hana.cloud.sap/sap/opu/odata/sap/ZSB_PURCAHSE'
+const BASE = '/sap/opu/odata/sap/ZSB_PURCAHSE'
 
 export function sapDateToDisplay(s) {
   if (!s || s === '00000000') return ''
@@ -348,115 +348,213 @@ function sapODataDate(value) {
 
 function mapHeader(raw) {
   return {
-    id: str(raw.PurchaseOrder),
+    id: str(raw.PurchaseOrder || raw.Po_No),
 
-    poNo: str(raw.PurchaseOrder),
+    poNo: str(raw.PurchaseOrder || raw.Po_No),
 
-    plant: str(raw.SupplyingPlant),
+    plant: str(raw.SupplyingPlant || raw.Plant),
 
-    plantName: str(raw.SupplyingPlant),
+    plantName: str(
+      raw.Plant_Desc ||
+      raw.SupplyingPlant ||
+      raw.Plant
+    ),
 
-    date: sapODataDate(raw.PurchaseOrderDate),
+    date: raw.PurchaseOrderDate
+      ? sapODataDate(raw.PurchaseOrderDate)
+      : sapDateToDisplay(raw.Po_Date),
 
-    type: str(raw.PurchaseOrderType),
+    type: str(raw.PurchaseOrderType || raw.Order_Type),
 
-    vendor: str(raw.Supplier),
+    vendor: str(raw.Supplier || raw.Vendor_Name),
 
-    vendorNo: str(raw.Supplier),
+    vendorNo: str(raw.Supplier || raw.Vendor_No),
 
-    currency: 'INR',
+    currency: str(
+      raw.DocumentCurrency ||
+      raw.Currency ||
+      'INR'
+    ),
 
-    amount: '',
+    amount: str(
+      raw.NetAmount ||
+      raw.Amount ||
+      '0.00'
+    ),
 
-    status: str(raw.PurchaseOrderType),
+    status: str(
+      raw.Status ||
+      raw.PurchaseOrderType
+    ),
 
-    buyerName: str(raw.CreatedByUser),
+    buyerName: str(
+      raw.CreatedByUser ||
+      raw.Buyer_Name
+    ),
 
-    purchaseOrg: str(raw.PurchasingOrganization),
+    purchaseOrg: str(
+      raw.PurchasingOrganization ||
+      raw.Purchase_Org
+    ),
 
-    purchaseOrgDesc: '',
+    purchaseOrgDesc: str(
+      raw.Purchase_OrgDesc || ''
+    ),
 
-    purchaseGroup: str(raw.PurchasingGroup),
+    purchaseGroup: str(
+      raw.PurchasingGroup ||
+      raw.Purchase_Group
+    ),
 
-    purchaseGroupDesc: '',
+    purchaseGroupDesc: str(
+      raw.Purchase_Group_Desc || ''
+    ),
 
-    orderType: str(raw.PurchaseOrderType),
+    orderType: str(
+      raw.PurchaseOrderType ||
+      raw.Order_Type
+    ),
 
-    orderTypeDesc: '',
+    orderTypeDesc: str(
+      raw.Order_Type_Desc || ''
+    ),
 
-    itemCount: '0',
+    itemCount: str(raw.Item_Count || '0'),
 
-    upcomingDelDate: '',
+    upcomingDelDate: raw.Upcoming_Del_Date
+      ? sapDateToDisplay(raw.Upcoming_Del_Date)
+      : '',
 
-    validFrom: sapODataDate(raw.CreationDate),
+    validFrom: raw.CreationDate
+      ? sapODataDate(raw.CreationDate)
+      : sapDateToDisplay(raw.ValidFrom),
 
-    validTo: '',
+    validTo: sapDateToDisplay(raw.ValidTo),
 
-    poType: str(raw.PurchaseOrderType),
+    poType: str(
+      raw.PoType ||
+      raw.PurchaseOrderType
+    ),
 
-    poFlag: '',
+    poFlag: str(raw.Po_Flag || ''),
 
-    asnFlag: ''
+    asnFlag: str(raw.Asn_Flag || '')
   }
 }
 function mapPoItem(raw) {
   return {
-    poNo: str(raw.PurchaseOrder),
+    poNo: str(raw.PurchaseOrder || raw.Po_No),
 
-    itemNo: str(raw.PurchaseOrderItem),
+    itemNo: str(
+      raw.PurchaseOrderItem ||
+      raw.Item_No
+    ),
 
-    ebelp: str(raw.PurchaseOrderItem),
+    ebelp: str(
+      raw.PurchaseOrderItem ||
+      raw.Item_No
+    ),
 
-    materialNumber: str(raw.Material),
+    materialNumber: str(
+      raw.Material ||
+      raw.Material_No
+    ),
 
-    materialName: str(raw.PurchaseOrderItemText),
+    materialName: str(
+      raw.PurchaseOrderItemText ||
+      raw.Material_Desc
+    ),
 
-    hsnCode: str(raw.CommodityCode),
+    hsnCode: str(
+      raw.CommodityCode ||
+      raw.Hsn_Code
+    ),
 
-    poQty: trimNum(raw.OrderQuantity),
+    poQty: trimNum(
+      raw.OrderQuantity ||
+      raw.Quantity
+    ),
 
-    confirmQty: trimNum(raw.PurgDocReleaseOrderQuantity),
+    confirmQty: trimNum(
+      raw.PurgDocReleaseOrderQuantity ||
+      raw.Confirm_Qty
+    ),
 
-    deliveredQty: trimNum(raw.StockTransferDeliveredQuantity),
+    deliveredQty: trimNum(
+      raw.StockTransferDeliveredQuantity ||
+      raw.Delivered_Qty
+    ),
 
-    unitPrice: trimNum(raw.NetPriceAmount),
+    unitPrice: trimNum(
+      raw.NetPriceAmount ||
+      raw.Total_Amount
+    ),
 
-    totalAmount: trimNum(raw.NetAmount),
+    totalAmount: trimNum(
+      raw.NetAmount ||
+      raw.Total_Amount
+    ),
 
-    currency: str(raw.DocumentCurrency),
+    currency: str(
+      raw.DocumentCurrency ||
+      raw.Currency
+    ),
 
-    deliveryUnit: str(raw.PurchaseOrderQuantityUnit),
+    deliveryUnit: str(
+      raw.PurchaseOrderQuantityUnit ||
+      raw.Uom
+    ),
 
-    storageLocation: str(raw.StorageLocation),
+    storageLocation: str(
+      raw.StorageLocation
+    ),
 
     plant: str(raw.Plant),
 
-    plantDesc: str(raw.Plant),
+    plantDesc: str(
+      raw.Plant_Desc ||
+      raw.Plant
+    ),
 
-    pendingQty: trimNum(raw.OrderQuantity),
+    pendingQty: trimNum(
+      raw.Pending_Qty ||
+      raw.OrderQuantity
+    ),
+
+    warehouseNo: str(
+      raw.Warehouse_No || ''
+    ),
+
+    igst: str(raw.Igst || ''),
+    cgst: str(raw.Cgst || ''),
+    sgst: str(raw.Sgst || ''),
+
+    asnCreated: trimNum(
+      raw.Asn_Created || '0'
+    ),
 
     status:
-      raw.IsCompletelyDelivered
+      raw.Confirm_Status ||
+      (raw.IsCompletelyDelivered
         ? 'Completed'
         : raw.PurgItemIsBlockedForDelivery
         ? 'Blocked'
-        : raw.PurgDocReleaseOrderQuantity > 0
+        : Number(
+            raw.PurgDocReleaseOrderQuantity
+          ) > 0
         ? 'Partially Confirmed'
-        : 'Confirmation Required',
+        : 'Confirmation Required'),
 
-    deliveryDate: raw.GoodsReceiptLatestCreationDate
-      ? sapDateToDisplay(raw.GoodsReceiptLatestCreationDate)
-      : '',
+    deliveryDate:
+      raw.Delivery_Date
+        ? sapDateToDisplay(raw.Delivery_Date)
+        : raw.GoodsReceiptLatestCreationDate
+        ? sapDateToDisplay(
+            raw.GoodsReceiptLatestCreationDate
+          )
+        : '',
 
-    warehouseNo: '',
-
-    igst: '',
-    cgst: '',
-    sgst: '',
-
-    asnCreated: '0.00',
-
-    scheduleLines: [],
+    scheduleLines: []
   }
 }
 
@@ -553,6 +651,19 @@ function mapPdirRef(raw) {
 
 export const purchaseOrderApi = {
   async fetchAllSuppliers() {
+     if (USE_MOCK) {
+    return [
+      ...new Map(
+        MOCK_PO_HEADERS.map(item => [
+          item.Vendor_No,
+          {
+            lifnr: item.Vendor_No,
+            name: item.Vendor_Name
+          }
+        ])
+      ).values()
+    ]
+  }
 
   const res = await fetch(
     `${BASE}/ZCDS_PURCHASE_HEADER?$format=json`,
@@ -584,6 +695,18 @@ export const purchaseOrderApi = {
 },
 
   async listHeaders({ vendorNo = '' } = {}) {
+    if (USE_MOCK) {
+
+    let rows = MOCK_PO_HEADERS
+
+    if (vendorNo) {
+      rows = rows.filter(
+        x => x.Vendor_No === vendorNo
+      )
+    }
+
+    return rows.map(mapHeader)
+  }
 
   let url =
     `${BASE}/ZCDS_PURCHASE_HEADER?$format=json`
@@ -620,6 +743,30 @@ export const purchaseOrderApi = {
   },
 
   async getPoDetail(poNo) {
+    if (USE_MOCK) {
+
+    const header =
+      MOCK_PO_HEADERS.find(
+        h => h.Po_No === poNo
+      )
+
+    if (!header) {
+      throw new Error('PO not found')
+    }
+
+    const items =
+      MOCK_PO_ITEMS[poNo] || []
+
+    return {
+      ...mapHeader(header),
+
+      itemCount: String(items.length),
+
+      amount: header.Amount,
+
+      items: items.map(mapPoItem)
+    }
+  }
 
   const [headerRes, itemRes] = await Promise.all([
     fetch(

@@ -37,6 +37,7 @@ modules:
     requires:
       - name: purchase-order-xsuaa
       - name: purchase-order-html5-runtime
+      - name: purchase-order-destination 
 
 resources:
   - name: purchase-order-html5-host
@@ -44,6 +45,12 @@ resources:
     parameters:
       service: html5-apps-repo
       service-plan: app-host
+
+  - name: purchase-order-destination
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite
 
   - name: purchase-order-html5-runtime
     type: org.cloudfoundry.managed-service
