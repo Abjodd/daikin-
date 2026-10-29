@@ -363,7 +363,7 @@ export default function CreateASN() {
       .getCreateAsnPageData(poNo)
       .then(({ header: fetchedHeader, items: fetchedItems, pdirRefs: fetchedPdir }) => {
         if (cancelled) return
-        setHeader(fetchedHeader)
+        setHeader(prev => ({ ...(prev || {}), ...(fetchedHeader || {}) }))
         setItems(fetchedItems || [])
         // Safely extract string options for PDIR dropdown to avoid [object Object] render bug
         const safePdirs = (fetchedPdir || []).map((p) => {
