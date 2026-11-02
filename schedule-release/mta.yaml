@@ -37,8 +37,15 @@ modules:
     requires:
       - name: sr-xsuaa
       - name: sr-html5-runtime
+      - name: sr-destination
 
 resources:
+  - name: sr-destination
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite
+
   - name: sr-html5-host
     type: org.cloudfoundry.managed-service
     parameters:
