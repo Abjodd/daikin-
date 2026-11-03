@@ -10,8 +10,7 @@
 // Service binding that exposes ZCDS_SCHDULEAGR_HEAD / _ITEM / ZCDS_SCHEDULEAGR_SCH.
 // If the ABAP team put these views in their own binding, change it here
 // (or set VITE_SR_ODATA_SERVICE in .env / .env.production).
-export const SR_SERVICE =
-  import.meta.env.VITE_SR_ODATA_SERVICE || '/sap/opu/odata/sap/ZSB_PURCAHSE'
+export const SR_SERVICE ='/sap/opu/odata/sap/ZSB_SCHEDULEAGREEMENT'
 
 const pad = (n) => String(n).padStart(2, '0')
 

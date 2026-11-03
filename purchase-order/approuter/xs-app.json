@@ -10,6 +10,13 @@
       "csrfProtection": false
     },
     {
+      "source": "^/sap/bc/http/(.*)$",
+      "target": "/sap/bc/http/$1",
+      "destination": "Supplier-Portal",
+      "authenticationType": "xsuaa",
+      "csrfProtection": false
+    },
+    {
       "source": "^(.*)$",
       "target": "$1",
       "service": "html5-apps-repo-rt",

@@ -6,6 +6,10 @@ export const USE_MOCK = false
 
 const BASE = '/sap/opu/odata/sap/ZSB_PURCAHSE'
 
+// Value written to ZP_PO_CONFIRM.Status on confirm (max 10 chars).
+// Check with your backend team what the expected value is.
+const CONFIRM_STATUS = 'CONF'
+
 export function sapDateToDisplay(s) {
   if (!s || s === '00000000') return ''
   const clean = String(s).replace(/-/g, '')
@@ -35,6 +39,61 @@ function trimNum(s) {
 }
 
 const str = (v) => String(v ?? '').trim()
+
+// ZP_PO_CONFIRM.Purchaseorderitem is MaxLength 4 (e.g. '0010'), while the
+// other CDS views use 5 characters ('00010').
+const toItem4 = (v) => str(v).padStart(4, '0').slice(-4)
+
+// ── Confirmation tracking (line level) ─────────────────────────
+// ZP_PO_CONFIRM currently exposes only Purchaseorder, Purchaseorderitem, Vendor,
+// Material and Status. For batch-wise / schedule-line-wise confirmation the backend
+// must add a schedule line (or batch) field to that entity's key. Once it exists,
+// put its property name here (e.g. 'Scheduleline'). While it is '' a confirmation
+// applies to the whole PO item + material.
+const CONFIRM_SCHEDULE_FIELD = ''
+
+// '0001' -> '1', '' -> ''
+const schNo = (v) => str(v).replace(/^0+/, '')
+
+// One key per confirmed line: item (4 chars) | material | schedule line
+const confirmKey = (item, material, sched = '') =>
+  `${toItem4(item)}|${str(material)}|${schNo(sched)}`
+
+// A line is confirmed if ZP_PO_CONFIRM has a row for that exact schedule line,
+// or an item-level row (no schedule line stored) for that item + material.
+export const isLineConfirmed = (map, item, material, sched = '') =>
+  map.has(confirmKey(item, material, sched)) || map.has(confirmKey(item, material, ''))
+
+// Returns Map<confirmKey, Status> for the rows already present in ZP_PO_CONFIRM for this PO.
+// (odataGet is a function declaration below, so it is hoisted and safe to call here.)
+export async function fetchConfirmedMap(poNo) {
+  try {
+    const data = await odataGet(
+      `/ZP_PO_CONFIRM?$filter=${encodeURIComponent(`Purchaseorder eq '${poNo}'`)}&$format=json`
+    )
+    const map = new Map()
+    for (const r of data?.results || []) {
+      const sched = CONFIRM_SCHEDULE_FIELD ? r[CONFIRM_SCHEDULE_FIELD] : ''
+      map.set(confirmKey(r.Purchaseorderitem, r.Material, sched), str(r.Status))
+    }
+    return map
+  } catch (err) {
+    console.warn('[PurchaseOrder] Could not load confirmations:', err.message)
+    return new Map()
+  }
+}
+
+// Dashboard status of one PO item, from how many of its schedule lines are confirmed.
+function itemConfirmStatus(rawItem, schs, confirmedMap) {
+  const item4 = toItem4(rawItem.PurchaseOrderItem)
+  const lines = schs.filter(s => toItem4(s.PurchaseOrderItem) === item4)
+  const scheds = lines.length ? lines.map(s => s.PurchaseOrderScheduleLine) : ['']
+  const done = scheds.filter(sc =>
+    isLineConfirmed(confirmedMap, rawItem.PurchaseOrderItem, rawItem.Material, sc)
+  ).length
+  if (done === 0) return 'Confirmation Required'
+  return done === scheds.length ? 'Confirmed' : 'Partially Confirmed'
+}
 
 // Mock PO Headers matching exact Daikin Demo screenshots
 const MOCK_PO_HEADERS = [
@@ -317,6 +376,26 @@ const MOCK_CONFIRM_ROWS = [
   },
 ]
 
+// Single default schedule line used when nothing is found for a PO item
+function defaultScheduleLine(poNo, ebelp) {
+  return [
+    {
+      ebeln: poNo,
+      ebelp: ebelp || '00010',
+      etenr: '1',
+      scheduleLine: '1',
+      deliveryDate: 'Aug 24, 2026',
+      deliverySchedule: '1500.00',
+      scheduleQty: '1500.00',
+      deliveredQty: '0.00',
+      confirmedQty: '1500.00',
+      unit: 'NO',
+      schLineNo: '1',
+    },
+  ]
+}
+
+// Generic OData GET helper. Returns json.d (for collections: { results: [...] }).
 async function odataGet(path) {
   const url = `${BASE}${path}`
   const res = await fetch(url, {
@@ -342,24 +421,24 @@ function sapODataDate(value) {
   return date.toLocaleDateString('en-US', {
     month: 'short',
     day: '2-digit',
-    year: 'numeric'
+    year: 'numeric',
   })
 }
 
 function mapHeader(raw) {
   return {
-    id: str(raw.PurchaseOrder || raw.Po_No),
+    id: str(raw.PurchaseOrder || raw.Purchaseorder || raw.Po_No),
 
-    poNo: str(raw.PurchaseOrder || raw.Po_No),
+    poNo: str(raw.PurchaseOrder || raw.Purchaseorder || raw.Po_No),
 
     companyCode: str(raw.CompanyCode || '1000'),
 
-    plant: str(raw.SupplyingPlant || raw.Plant),
+    plant: str(raw.Plant),
 
     plantName: str(
       raw.Plant_Desc ||
       raw.SupplyingPlant ||
-      raw.Plant
+      raw.SupplierName
     ),
 
     date: raw.PurchaseOrderDate
@@ -368,9 +447,9 @@ function mapHeader(raw) {
 
     type: str(raw.PurchaseOrderType || raw.Order_Type),
 
-    vendor: str(raw.Supplier || raw.Vendor_Name),
+    vendor: str(raw.Supplier || raw.Vendor || raw.Vendor_Name),
 
-    vendorNo: str(raw.Supplier || raw.Vendor_No),
+    vendorNo: str(raw.Supplier || raw.Vendor || raw.Vendor_No),
 
     currency: str(
       raw.DocumentCurrency ||
@@ -440,9 +519,10 @@ function mapHeader(raw) {
 
     poFlag: str(raw.Po_Flag || ''),
 
-    asnFlag: str(raw.Asn_Flag || '')
+    asnFlag: str(raw.Asn_Flag || ''),
   }
 }
+
 function mapPoItem(raw) {
   return {
     poNo: str(raw.PurchaseOrder || raw.Po_No),
@@ -541,9 +621,7 @@ function mapPoItem(raw) {
         ? 'Completed'
         : raw.PurgItemIsBlockedForDelivery
         ? 'Blocked'
-        : Number(
-            raw.PurgDocReleaseOrderQuantity
-          ) > 0
+        : Number(raw.PurgDocReleaseOrderQuantity) > 0
         ? 'Partially Confirmed'
         : 'Confirmation Required'),
 
@@ -551,16 +629,25 @@ function mapPoItem(raw) {
       raw.Delivery_Date
         ? sapDateToDisplay(raw.Delivery_Date)
         : raw.GoodsReceiptLatestCreationDate
-        ? sapDateToDisplay(
-            raw.GoodsReceiptLatestCreationDate
-          )
+        ? sapDateToDisplay(raw.GoodsReceiptLatestCreationDate)
         : '',
 
-    scheduleLines: []
+    scheduleLines: [],
   }
 }
 
-function mapPoDetail(header, items = []) {
+function mapPoDetail(header, items = [], confirmedMap = new Map(), schs = []) {
+  const mappedItems = items.map(raw => {
+    const it = mapPoItem(raw)
+    // Confirmation state comes from ZP_PO_CONFIRM, not from SAP release quantities
+    if (it.status !== 'Completed' && it.status !== 'Blocked') {
+      it.status = itemConfirmStatus(raw, schs, confirmedMap)
+      it.isConfirmed = it.status === 'Confirmed'
+      if (it.isConfirmed) it.confirmQty = it.poQty
+    }
+    return it
+  })
+
   return {
     id: str(header.PurchaseOrder),
 
@@ -574,7 +661,7 @@ function mapPoDetail(header, items = []) {
 
     date: sapODataDate(header.PurchaseOrderDate),
 
-    plant: str(header.SupplyingPlant),
+    plant: str(items[0]?.Plant || ''),
 
     plantDesc: str(header.SupplyingPlant),
 
@@ -588,21 +675,18 @@ function mapPoDetail(header, items = []) {
 
     status: str(header.PurchaseOrderType),
 
-    itemCount: String(items.length),
+    itemCount: String(mappedItems.length),
 
     currency: 'INR',
 
     amount: items
-      .reduce(
-        (sum, item) =>
-          sum + Number(item.NetAmount || 0),
-        0
-      )
+      .reduce((sum, item) => sum + Number(item.NetAmount || 0), 0)
       .toFixed(2),
 
-    items: items.map(mapPoItem)
+    items: mappedItems,
   }
 }
+
 function mapConfirmRow(raw) {
   return {
     poNo:            str(raw.Po_No),
@@ -622,6 +706,7 @@ function mapConfirmRow(raw) {
     shipDate:        str(raw.ShipDate),
     shipDateDisplay: sapDateToDisplay(raw.ShipDate),
     storageBin:      str(raw.StorageBin),
+    alreadyConfirmed: !!raw.alreadyConfirmed,
   }
 }
 
@@ -632,7 +717,7 @@ function mapLineItem(raw) {
   const schedQty = trimNum(raw.ScheduleLineOrderQuantity ?? raw.Menge)
   const delivQty = trimNum(raw.PrevDelivQtyOfScheduleLine ?? raw.Wemng)
   const confQty = trimNum(raw.ScheduleLineCommittedQuantity ?? raw.Bmeng)
-  const schLine = str(raw.PurchaseOrderScheduleLine || raw.Etenr)?.trim()
+  const schLine = str(raw.PurchaseOrderScheduleLine || raw.Etenr)
 
   return {
     ebeln:            str(raw.PurchaseOrder || raw.Ebeln),
@@ -664,183 +749,185 @@ function mapPdirRef(raw) {
 
 export const purchaseOrderApi = {
   async fetchAllSuppliers() {
-     if (USE_MOCK) {
+    if (USE_MOCK) {
+      return [
+        ...new Map(
+          MOCK_PO_HEADERS.map(item => [
+            item.Vendor_No,
+            {
+              lifnr: item.Vendor_No,
+              name: item.Vendor_Name,
+            },
+          ])
+        ).values(),
+      ]
+    }
+
+    const res = await fetch(`${BASE}/ZCDS_PURCHASE_HEADER?$format=json`, {
+      headers: {
+        Accept: 'application/json',
+      },
+      credentials: 'include',
+    })
+
+    if (!res.ok) {
+      throw new Error('Failed to load suppliers')
+    }
+
+    const json = await res.json()
+
     return [
       ...new Map(
-        MOCK_PO_HEADERS.map(item => [
-          item.Vendor_No,
+        (json.d?.results || []).map(item => [
+          item.Supplier,
           {
-            lifnr: item.Vendor_No,
-            name: item.Vendor_Name
-          }
+            lifnr: item.Supplier,
+            name: item.Supplier,
+          },
         ])
-      ).values()
+      ).values(),
     ]
-  }
-
-  const res = await fetch(
-    `${BASE}/ZCDS_PURCHASE_HEADER?$format=json`,
-    {
-      headers: {
-        Accept: 'application/json'
-      },
-      credentials: 'include'
-    }
-  )
-
-  if (!res.ok) {
-    throw new Error('Failed to load suppliers')
-  }
-
-  const json = await res.json()
-
-  return [
-    ...new Map(
-      (json.d?.results || []).map(item => [
-        item.Supplier,
-        {
-          lifnr: item.Supplier,
-          name: item.Supplier
-        }
-      ])
-    ).values()
-  ]
-},
+  },
 
   async listHeaders({ vendorNo = '' } = {}) {
     if (USE_MOCK) {
+      let rows = MOCK_PO_HEADERS
 
-    let rows = MOCK_PO_HEADERS
+      if (vendorNo) {
+        rows = rows.filter(x => x.Vendor_No === vendorNo)
+      }
 
-    if (vendorNo) {
-      rows = rows.filter(
-        x => x.Vendor_No === vendorNo
-      )
+      return rows.map(mapHeader)
     }
 
-    return rows.map(mapHeader)
-  }
+    let url = `${BASE}/ZCDS_PURCHASE_HEADER?$format=json`
 
-  let url =
-    `${BASE}/ZCDS_PURCHASE_HEADER?$format=json`
+    if (vendorNo) {
+      url += `&$filter=${encodeURIComponent(`Supplier eq '${vendorNo}'`)}`
+    }
 
-  if (vendorNo) {
-    url += `&$filter=Supplier eq '${vendorNo}'`
-  }
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+      },
+      credentials: 'include',
+    })
 
-  const res = await fetch(url, {
-    headers: {
-      Accept: 'application/json'
-    },
-    credentials: 'include'
-  })
+    if (!res.ok) {
+      throw new Error('Failed to load purchase orders')
+    }
 
-  if (!res.ok) {
-    throw new Error('Failed to load purchase orders')
-  }
+    const json = await res.json()
 
-  const json = await res.json()
+    return (json.d?.results || []).map(mapHeader)
+  },
 
-  return (json.d?.results || []).map(mapHeader)
-},
-
+  /**
+   * ZP_PO_CONFIRM has a 4-part key (Purchaseorder, Purchaseorderitem, Vendor,
+   * Material), so a single row cannot be read by key from just PO + vendor.
+   * Use $filter instead.
+   */
   async getHeader(poNo, vendorNo = '') {
     if (USE_MOCK) {
       const h = MOCK_PO_HEADERS.find(item => item.Po_No === poNo) || MOCK_PO_HEADERS[0]
       return mapHeader(h)
     }
 
-    const key = `Po_No='${poNo}',Vendor_No='${vendorNo}'`
-    const data = await odataGet(`/PO_HEADERSet(${key})`)
-    return mapHeader(data)
+    let filter = `Purchaseorder eq '${poNo}'`
+    if (vendorNo) filter += ` and Vendor eq '${vendorNo}'`
+
+    const data = await odataGet(
+      `/ZP_PO_CONFIRM?$filter=${encodeURIComponent(filter)}&$format=json`
+    )
+    const row = data?.results?.[0]
+    if (!row) throw new Error(`PO ${poNo} not found`)
+
+    return mapHeader({
+      Purchaseorder: row.Purchaseorder,
+      Vendor: row.Vendor,
+      Status: row.Status,
+    })
   },
 
   async getPoDetail(poNo) {
     if (USE_MOCK) {
+      const header = MOCK_PO_HEADERS.find(h => h.Po_No === poNo)
 
-    const header =
-      MOCK_PO_HEADERS.find(
-        h => h.Po_No === poNo
-      )
+      if (!header) {
+        throw new Error('PO not found')
+      }
+
+      const items = MOCK_PO_ITEMS[poNo] || []
+
+      return {
+        ...mapHeader(header),
+        itemCount: String(items.length),
+        amount: header.Amount,
+        items: items.map(mapPoItem),
+      }
+    }
+
+    const [headerRes, itemRes, schRes, confirmedMap] = await Promise.all([
+      fetch(
+        `${BASE}/ZCDS_PURCHASE_HEADER?$filter=${encodeURIComponent(`PurchaseOrder eq '${poNo}'`)}&$format=json`,
+        {
+          headers: {
+            Accept: 'application/json',
+          },
+          credentials: 'include',
+        }
+      ),
+
+      fetch(
+        `${BASE}/ZCDS_PURCHASEITEM?$filter=${encodeURIComponent(`PurchaseOrder eq '${poNo}'`)}&$format=json`,
+        {
+          headers: {
+            Accept: 'application/json',
+          },
+          credentials: 'include',
+        }
+      ),
+
+      fetch(
+        `${BASE}/ZCDS_PURCHASEITEM_SCH?$filter=${encodeURIComponent(`PurchaseOrder eq '${poNo}'`)}&$format=json`,
+        {
+          headers: {
+            Accept: 'application/json',
+          },
+          credentials: 'include',
+        }
+      ),
+
+      fetchConfirmedMap(poNo),
+    ])
+
+    if (!headerRes.ok || !itemRes.ok) {
+      throw new Error('Failed to load PO details')
+    }
+
+    const headerJson = await headerRes.json()
+    const itemJson = await itemRes.json()
+
+    const header = headerJson.d?.results?.[0]
 
     if (!header) {
       throw new Error('PO not found')
     }
 
-    const items =
-      MOCK_PO_ITEMS[poNo] || []
+    // Schedule lines are optional here: if the call fails, status falls back to item level
+    const schJson = schRes.ok ? await schRes.json() : { d: { results: [] } }
 
-    return {
-      ...mapHeader(header),
-
-      itemCount: String(items.length),
-
-      amount: header.Amount,
-
-      items: items.map(mapPoItem)
-    }
-  }
-
-  const [headerRes, itemRes] = await Promise.all([
-    fetch(
-      `${BASE}/ZCDS_PURCHASE_HEADER?$filter=PurchaseOrder eq '${poNo}'&$format=json`,
-      {
-        headers: {
-          Accept: 'application/json'
-        },
-        credentials: 'include'
-      }
-    ),
-
-    fetch(
-      `${BASE}/ZCDS_PURCHASEITEM?$filter=PurchaseOrder eq '${poNo}'&$format=json`,
-      {
-        headers: {
-          Accept: 'application/json'
-        },
-        credentials: 'include'
-      }
-    )
-  ])
-
-  if (!headerRes.ok || !itemRes.ok) {
-    throw new Error('Failed to load PO details')
-  }
-
-  const headerJson = await headerRes.json()
-  const itemJson = await itemRes.json()
-
-  const header = headerJson.d?.results?.[0]
-
-  if (!header) {
-    throw new Error('PO not found')
-  }
-
-  return mapPoDetail(
-    header,
-    itemJson.d?.results || []
-  )
-},
+    return mapPoDetail(header, itemJson.d?.results || [], confirmedMap, schJson.d?.results || [])
+  },
 
   async getLineItems(poNo, ebelp) {
+    const mockLines = () =>
+      MOCK_SCHEDULE_LINES.filter(l => l.Ebeln === poNo && (!ebelp || l.Ebelp === ebelp))
+
     if (USE_MOCK) {
-      const lines = MOCK_SCHEDULE_LINES.filter(l => l.Ebeln === poNo && (!ebelp || l.Ebelp === ebelp))
+      const lines = mockLines()
       if (lines.length > 0) return lines.map(mapLineItem)
-      return [
-        {
-          ebeln: poNo,
-          ebelp: ebelp || '00010',
-          etenr: '1',
-          scheduleLine: '1',
-          deliveryDate: 'Aug 24, 2026',
-          deliverySchedule: '1500.00',
-          scheduleQty: '1500.00',
-          deliveredQty: '0.00',
-          confirmedQty: '1500.00',
-          unit: 'NO',
-          schLineNo: '1',
-        }
-      ]
+      return defaultScheduleLine(poNo, ebelp)
     }
 
     try {
@@ -849,68 +936,49 @@ export const purchaseOrderApi = {
         const padded = ebelp.padStart(5, '0')
         filter += ` and (PurchaseOrderItem eq '${padded}' or PurchaseOrderItem eq '${ebelp}')`
       }
-      const res = await fetch(`${BASE}/ZCDS_PURCHASEITEM_SCH?$filter=${encodeURIComponent(filter)}&$format=json`, {
-        headers: { Accept: 'application/json' },
-        credentials: 'include',
-      })
+      const res = await fetch(
+        `${BASE}/ZCDS_PURCHASEITEM_SCH?$filter=${encodeURIComponent(filter)}&$format=json`,
+        {
+          headers: { Accept: 'application/json' },
+          credentials: 'include',
+        }
+      )
       if (!res.ok) throw new Error(`OData ${res.status}: Failed to fetch schedule lines`)
       const json = await res.json()
       const results = json.d?.results || []
       if (results.length > 0) return results.map(mapLineItem)
 
-      // If no schedule lines found for item, query without item filter or use mock fallback
-      const fallbackLines = MOCK_SCHEDULE_LINES.filter(l => l.Ebeln === poNo && (!ebelp || l.Ebelp === ebelp))
+      // No schedule lines found for this item: use fallback
+      const fallbackLines = mockLines()
       if (fallbackLines.length > 0) return fallbackLines.map(mapLineItem)
-      return [
-        {
-          ebeln: poNo,
-          ebelp: ebelp || '00010',
-          etenr: '1',
-          scheduleLine: '1',
-          deliveryDate: 'Aug 24, 2026',
-          deliverySchedule: '1500.00',
-          scheduleQty: '1500.00',
-          deliveredQty: '0.00',
-          confirmedQty: '1500.00',
-          unit: 'NO',
-          schLineNo: '1',
-        }
-      ]
+      return defaultScheduleLine(poNo, ebelp)
     } catch (err) {
       console.warn('[PurchaseOrder.getLineItems] Live fetch failed, using fallback:', err.message)
-      const lines = MOCK_SCHEDULE_LINES.filter(l => l.Ebeln === poNo && (!ebelp || l.Ebelp === ebelp))
+      const lines = mockLines()
       if (lines.length > 0) return lines.map(mapLineItem)
-      return [
-        {
-          ebeln: poNo,
-          ebelp: ebelp || '00010',
-          etenr: '1',
-          scheduleLine: '1',
-          deliveryDate: 'Aug 24, 2026',
-          deliverySchedule: '1500.00',
-          scheduleQty: '1500.00',
-          deliveredQty: '0.00',
-          confirmedQty: '1500.00',
-          unit: 'NO',
-          schLineNo: '1',
-        }
-      ]
+      return defaultScheduleLine(poNo, ebelp)
     }
   },
 
   async getPdirRefs(poNo) {
-    if (USE_MOCK) {
-      return [
+    const fallback = () =>
+      [
         { ebeln: poNo, ebelp: '00010', refNo: 'PDIR-2026-081', refDate: 'Aug 18, 2026' },
         { ebeln: poNo, ebelp: '00020', refNo: 'PDIR-2026-082', refDate: 'Aug 18, 2026' },
       ].map(mapPdirRef)
+
+    if (USE_MOCK) {
+      return fallback()
     }
 
     try {
-      const res = await fetch(`${BASE}/ZP_PUR_ASN_ITEM?$filter=Purchaseorder eq '${poNo}'&$format=json`, {
-        headers: { Accept: 'application/json' },
-        credentials: 'include',
-      })
+      const res = await fetch(
+        `${BASE}/ZP_PUR_ASN_ITEM?$filter=${encodeURIComponent(`Purchaseorder eq '${poNo}'`)}&$format=json`,
+        {
+          headers: { Accept: 'application/json' },
+          credentials: 'include',
+        }
+      )
       if (!res.ok) throw new Error(`OData ${res.status}`)
       const json = await res.json()
       const results = json.d?.results || []
@@ -927,10 +995,7 @@ export const purchaseOrderApi = {
       console.warn('[PurchaseOrder.getPdirRefs] Live fetch failed, using fallback:', err.message)
     }
 
-    return [
-      { ebeln: poNo, ebelp: '00010', refNo: 'PDIR-2026-081', refDate: 'Aug 18, 2026' },
-      { ebeln: poNo, ebelp: '00020', refNo: 'PDIR-2026-082', refDate: 'Aug 18, 2026' },
-    ].map(mapPdirRef)
+    return fallback()
   },
 
   async getConfirmData(poNo) {
@@ -941,15 +1006,17 @@ export const purchaseOrderApi = {
     if (!poNo || poNo === 'undefined') throw new Error('No PO number provided')
 
     try {
-      const [itemRes, schRes] = await Promise.all([
-        fetch(`${BASE}/ZCDS_PURCHASEITEM?$filter=PurchaseOrder eq '${poNo}'&$format=json`, {
+      const poFilter = encodeURIComponent(`PurchaseOrder eq '${poNo}'`)
+      const [itemRes, schRes, confirmedMap] = await Promise.all([
+        fetch(`${BASE}/ZCDS_PURCHASEITEM?$filter=${poFilter}&$format=json`, {
           headers: { Accept: 'application/json' },
           credentials: 'include',
         }),
-        fetch(`${BASE}/ZCDS_PURCHASEITEM_SCH?$filter=PurchaseOrder eq '${poNo}'&$format=json`, {
+        fetch(`${BASE}/ZCDS_PURCHASEITEM_SCH?$filter=${poFilter}&$format=json`, {
           headers: { Accept: 'application/json' },
           credentials: 'include',
         }),
+        fetchConfirmedMap(poNo),
       ])
 
       const itemJson = itemRes.ok ? await itemRes.json() : { d: { results: [] } }
@@ -958,62 +1025,100 @@ export const purchaseOrderApi = {
       const items = itemJson.d?.results || []
       const schs = schJson.d?.results || []
 
+      // Nothing found for this PO: return an empty list, never fake rows
       if (items.length === 0 && schs.length === 0) {
-        return MOCK_CONFIRM_ROWS.map(mapConfirmRow)
+        return []
       }
 
       const rows = []
       if (schs.length > 0) {
         for (const sch of schs) {
-          const matchingItem = items.find(it =>
-            str(it.PurchaseOrderItem) === str(sch.PurchaseOrderItem) ||
-            str(it.PurchaseOrderItem)?.replace(/^0+/, '') === str(sch.PurchaseOrderItem)?.replace(/^0+/, '')
-          ) || {}
+          const matchingItem =
+            items.find(
+              it =>
+                str(it.PurchaseOrderItem) === str(sch.PurchaseOrderItem) ||
+                str(it.PurchaseOrderItem).replace(/^0+/, '') ===
+                  str(sch.PurchaseOrderItem).replace(/^0+/, '')
+            ) || {}
 
-          rows.push(mapConfirmRow({
-            Po_No: str(sch.PurchaseOrder || poNo),
-            Item_No: str(sch.PurchaseOrderItem || matchingItem.PurchaseOrderItem),
-            Schedule_Line: str(sch.PurchaseOrderScheduleLine || '1'),
-            Vendor_No: str(matchingItem.Supplier || ''),
-            Material_No: str(matchingItem.Material || ''),
-            Material_Desc: str(matchingItem.PurchaseOrderItemText || ''),
-            PO_Quantity: str(sch.ScheduleLineOrderQuantity || matchingItem.OrderQuantity || ''),
-            Conf_Quantity: str(sch.ScheduleLineCommittedQuantity || matchingItem.PurgDocReleaseOrderQuantity || sch.ScheduleLineOrderQuantity || ''),
-            Del_Quantity: str(sch.PrevDelivQtyOfScheduleLine || matchingItem.StockTransferDeliveredQuantity || '0.00'),
-            Asn_Quantity: '0.00',
-            Conf_Date: sch.ScheduleLineDeliveryDate ? sapODataDate(sch.ScheduleLineDeliveryDate) : '',
-            DispDate: sch.ScheduleLineDeliveryDate ? sapODataDate(sch.ScheduleLineDeliveryDate) : '',
-            ShipDate: sch.ScheduleLineDeliveryDate ? sapODataDate(sch.ScheduleLineDeliveryDate) : '',
-            StorageBin: matchingItem.StorageLocation || '',
-          }))
+          rows.push(
+            mapConfirmRow({
+              Po_No: str(sch.PurchaseOrder || poNo),
+              Item_No: str(sch.PurchaseOrderItem || matchingItem.PurchaseOrderItem),
+              Schedule_Line: str(sch.PurchaseOrderScheduleLine || '1'),
+              Vendor_No: str(matchingItem.Supplier || ''),
+              Material_No: str(matchingItem.Material || ''),
+              Material_Desc: str(matchingItem.PurchaseOrderItemText || ''),
+              PO_Quantity: str(sch.ScheduleLineOrderQuantity || matchingItem.OrderQuantity || ''),
+              Conf_Quantity: str(
+                sch.ScheduleLineCommittedQuantity ||
+                  matchingItem.PurgDocReleaseOrderQuantity ||
+                  sch.ScheduleLineOrderQuantity ||
+                  ''
+              ),
+              Del_Quantity: str(
+                sch.PrevDelivQtyOfScheduleLine ||
+                  matchingItem.StockTransferDeliveredQuantity ||
+                  '0.00'
+              ),
+              Asn_Quantity: '0.00',
+              Conf_Date: sch.ScheduleLineDeliveryDate ? sapODataDate(sch.ScheduleLineDeliveryDate) : '',
+              DispDate: sch.ScheduleLineDeliveryDate ? sapODataDate(sch.ScheduleLineDeliveryDate) : '',
+              ShipDate: sch.ScheduleLineDeliveryDate ? sapODataDate(sch.ScheduleLineDeliveryDate) : '',
+              StorageBin: matchingItem.StorageLocation || '',
+              alreadyConfirmed: isLineConfirmed(
+                confirmedMap,
+                sch.PurchaseOrderItem || matchingItem.PurchaseOrderItem,
+                matchingItem.Material,
+                sch.PurchaseOrderScheduleLine
+              ),
+            })
+          )
         }
       } else {
         for (const it of items) {
-          rows.push(mapConfirmRow({
-            Po_No: str(it.PurchaseOrder || poNo),
-            Item_No: str(it.PurchaseOrderItem),
-            Schedule_Line: '1',
-            Vendor_No: str(it.Supplier || ''),
-            Material_No: str(it.Material || ''),
-            Material_Desc: str(it.PurchaseOrderItemText || ''),
-            PO_Quantity: str(it.OrderQuantity || ''),
-            Conf_Quantity: str(it.PurgDocReleaseOrderQuantity || it.OrderQuantity || ''),
-            Del_Quantity: str(it.StockTransferDeliveredQuantity || '0.00'),
-            Asn_Quantity: '0.00',
-            Conf_Date: '',
-            DispDate: '',
-            ShipDate: '',
-            StorageBin: it.StorageLocation || '',
-          }))
+          rows.push(
+            mapConfirmRow({
+              Po_No: str(it.PurchaseOrder || poNo),
+              Item_No: str(it.PurchaseOrderItem),
+              Schedule_Line: '1',
+              Vendor_No: str(it.Supplier || ''),
+              Material_No: str(it.Material || ''),
+              Material_Desc: str(it.PurchaseOrderItemText || ''),
+              PO_Quantity: str(it.OrderQuantity || ''),
+              Conf_Quantity: str(it.PurgDocReleaseOrderQuantity || it.OrderQuantity || ''),
+              Del_Quantity: str(it.StockTransferDeliveredQuantity || '0.00'),
+              Asn_Quantity: '0.00',
+              Conf_Date: '',
+              DispDate: '',
+              ShipDate: '',
+              StorageBin: it.StorageLocation || '',
+              alreadyConfirmed: isLineConfirmed(confirmedMap, it.PurchaseOrderItem, it.Material, ''),
+            })
+          )
         }
       }
-      return rows
+      // Confirmed lines are not offered for confirmation again
+      return rows.filter(r => !r.alreadyConfirmed)
     } catch (err) {
-      console.warn('[PurchaseOrder.getConfirmData] Live fetch failed, using fallback:', err.message)
-      return MOCK_CONFIRM_ROWS.map(mapConfirmRow)
+      // Do not fall back to mock rows on a live failure: surface the error to the UI
+      console.error('[PurchaseOrder.getConfirmData] Live fetch failed:', err.message)
+      throw err
     }
   },
 
+  /**
+   * Confirms the selected PO items.
+   *
+   * ZP_PO_CONFIRM exposes only: Purchaseorder, Purchaseorderitem (4 chars),
+   * Vendor, Material and Status, and has no navigation property. So we send
+   * one POST per selected item using exactly those property names.
+   *
+   * NOTE: quantity / date / storage bin cannot be sent with this entity.
+   * They need extra fields in the CDS projection or a separate entity/action.
+   * Errors are thrown instead of being reported as a simulated success.
+   * A duplicate-key error (already confirmed in the backend) is skipped.
+   */
   async submitConfirm(poNo, selectedRows, vendorNo = '') {
     if (USE_MOCK) {
       await new Promise(r => setTimeout(r, 400))
@@ -1021,19 +1126,45 @@ export const purchaseOrderApi = {
     }
 
     if (!poNo || poNo === 'undefined') throw new Error('No PO number provided')
+    if (!selectedRows || selectedRows.length === 0) throw new Error('No rows selected to confirm')
 
-    try {
-      const csrfRes = await fetch(`${BASE}/`, {
-        method: 'GET',
-        headers: {
-          'X-CSRF-Token': 'Fetch',
-          Accept: 'application/json',
-        },
-        credentials: 'include',
-      })
-      const token = csrfRes.headers.get('X-CSRF-Token') || ''
+    // 1) Fetch CSRF token
+    const csrfRes = await fetch(`${BASE}/`, {
+      method: 'GET',
+      headers: {
+        'X-CSRF-Token': 'Fetch',
+        Accept: 'application/json',
+      },
+      credentials: 'include',
+    })
+    if (!csrfRes.ok) {
+      throw new Error(`Could not fetch CSRF token: ${csrfRes.status}`)
+    }
+    const token = csrfRes.headers.get('X-CSRF-Token') || ''
 
-      const res = await fetch(`${BASE}/PO_HEADERSet`, {
+    // 2) One POST per unique item (no deep insert / nav property in metadata).
+    //    The confirm screen has one row per schedule line, so dedupe by item + material.
+    const results = []
+    const seen = new Set()
+    for (const row of selectedRows) {
+      // Without a schedule-line field on ZP_PO_CONFIRM the key is item + vendor + material,
+      // so several schedule lines of one item can only be posted once.
+      const sched = CONFIRM_SCHEDULE_FIELD ? schNo(row.scheduleLine) : ''
+      const dedupeKey = `${toItem4(row.itemNo)}|${str(row.materialNo)}|${sched}`
+      if (seen.has(dedupeKey)) continue
+      seen.add(dedupeKey)
+
+      const payload = {
+        Purchaseorder: poNo,
+        Purchaseorderitem: toItem4(row.itemNo),
+        Vendor: str(vendorNo || row.vendorNo),
+        Material: str(row.materialNo),
+        Status: CONFIRM_STATUS,
+      }
+      // Adjust the padding/format to whatever the backend field expects
+      if (CONFIRM_SCHEDULE_FIELD) payload[CONFIRM_SCHEDULE_FIELD] = sched
+
+      const res = await fetch(`${BASE}/ZP_PO_CONFIRM`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1041,34 +1172,29 @@ export const purchaseOrderApi = {
           'X-CSRF-Token': token,
         },
         credentials: 'include',
-        body: JSON.stringify({
-          Po_No: poNo,
-          Vendor_No: vendorNo,
-          headertopoconfirmnav: {
-            results: selectedRows.map(row => ({
-              Po_No: poNo,
-              Item_No: row.itemNo,
-              Schedule_Line: row.scheduleLine,
-              Vendor_No: vendorNo,
-              Material_No: row.materialNo,
-              Conf_Date: row.confDate,
-              Conf_Quantity: String(row.confirmedQty),
-              Del_Quantity: String(row.delQty),
-              StorageBin: row.storageBin || '',
-            })),
-          },
-        }),
+        body: JSON.stringify(payload),
       })
 
       if (!res.ok) {
-        console.warn(`[submitConfirm] Backend returned ${res.status}, marking as confirmed for demo`)
-        return { success: true, simulated: true }
+        let detail = '', code = ''
+        try {
+          const errJson = await res.json()
+          code = errJson?.error?.code || ''
+          detail = errJson?.error?.message?.value || JSON.stringify(errJson)
+        } catch {
+          detail = await res.text().catch(() => '')
+        }
+        // Already confirmed in backend: not a failure, just skip
+        if (code === 'MC_CSP_USR_RUNTIME/006') {
+          results.push({ success: true, skipped: true })
+          continue
+        }
+        throw new Error(`Confirm failed for item ${payload.Purchaseorderitem} (${res.status}): ${detail}`)
       }
 
-      return res.status === 204 ? { success: true } : res.json()
-    } catch (err) {
-      console.warn('[submitConfirm] Live submit failed, falling back to simulated success:', err.message)
-      return { success: true, simulated: true }
+      results.push(res.status === 204 ? { success: true } : await res.json())
     }
+
+    return { success: true, results }
   },
 }

@@ -25,8 +25,8 @@ const parseDdmmyyyy = (s) => {
 }
 
 // ─── BUTTON LOGIC ──────────────────────────────────────────────
-const asnDisabled = (items = []) =>
-  items.length > 0 && items.every(i => i.status === 'Confirmation Required')
+const isConfirmedItem = (i) => i.status === 'Confirmed' || i.status === 'Partially Confirmed'
+const asnDisabled = (items = []) => !items.some(isConfirmedItem)
 const canConfirm = (items = []) =>
   items.length > 0 &&
   items.some(i => i.status === 'Partially Confirmed' || i.status === 'Confirmation Required')
@@ -179,12 +179,18 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
     )
   }, [rows, materialFilter])
 
-  const allSelected = filteredRows.length > 0 && filteredRows.every((_, idx) => selected.has(String(idx)))
-  const toggleAll   = () => {
-    if (allSelected) setSelected(new Set())
-    else setSelected(new Set(filteredRows.map((_, idx) => String(idx))))
-  }
+  // Only rows that are not already confirmed in the backend can be selected
+  const selectableIdx = useMemo(
+    () => filteredRows.map((r, i) => (r.alreadyConfirmed ? null : String(i))).filter(i => i !== null),
+    [filteredRows]
+  )
+
+  const allSelected = selectableIdx.length > 0 && selectableIdx.every(k => selected.has(k))
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(selectableIdx))
+
   const toggleRow = (key) => {
+    const row = filteredRows[Number(key)]
+    if (row?.alreadyConfirmed) return
     const s = new Set(selected)
     s.has(key) ? s.delete(key) : s.add(key)
     setSelected(s)
@@ -194,7 +200,7 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
   const handleSubmit = async () => {
     setConfirmModal(false); setSubmitting(true)
     try {
-      const selectedRows = filteredRows.filter((_, idx) => selected.has(String(idx)))
+      const selectedRows = filteredRows.filter((r, idx) => selected.has(String(idx)) && !r.alreadyConfirmed)
       await purchaseOrderApi.submitConfirm(agreement.id, selectedRows, agreement.vendorNo)
       setSubmitted(true)
     } catch (e) { setError(e.message) }
@@ -269,7 +275,8 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
             <thead>
               <tr className="bg-gradient-to-b from-[#fafbfc] to-[#f5f6f7] border-b border-[#e5e5e5] text-[#6a6d70]">
                 <th className="py-3 px-3 w-10">
-                  <input type="checkbox" checked={allSelected} onChange={toggleAll} className="w-4 h-4 accent-[#0a6ed1] cursor-pointer"/>
+                  <input type="checkbox" checked={allSelected} disabled={selectableIdx.length === 0}
+                    onChange={toggleAll} className="w-4 h-4 accent-[#0a6ed1] cursor-pointer disabled:cursor-not-allowed"/>
                 </th>
                 {['Item', 'Material', 'PO Qty', 'Conf. Qty', 'Del. Qty', 'ASN Qty', 'Conf. Date', 'Ship Date'].map(h => (
                   <th key={h} className="text-left font-semibold py-3 px-3 text-[11px] uppercase tracking-wider">{h}</th>
@@ -284,17 +291,25 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
                   </div>
                 </td></tr>
               ) : filteredRows.length === 0 ? (
-                <tr><td colSpan={9} className="py-12 text-center text-[13px] text-[#6a6d70]">No confirmation lines found</td></tr>
+                <tr><td colSpan={9} className="py-12 text-center text-[13px] text-[#6a6d70]">No lines pending confirmation</td></tr>
               ) : filteredRows.map((r, idx) => {
                 const key = String(idx)
                 const isSelected = selected.has(key)
                 return (
                   <tr key={key} onClick={() => toggleRow(key)}
-                    className={`border-b border-[#f0f0f0] last:border-b-0 cursor-pointer transition-colors ${isSelected ? 'bg-[#ebf5ff]' : 'hover:bg-[#fafbfc]'}`}>
+                    className={`border-b border-[#f0f0f0] last:border-b-0 transition-colors
+                      ${r.alreadyConfirmed ? 'bg-[#f5f6f7] opacity-60 cursor-not-allowed'
+                        : isSelected ? 'bg-[#ebf5ff] cursor-pointer' : 'hover:bg-[#fafbfc] cursor-pointer'}`}>
                     <td className="py-3 px-3" onClick={e => { e.stopPropagation(); toggleRow(key) }}>
-                      <input type="checkbox" checked={isSelected} onChange={() => toggleRow(key)} className="w-4 h-4 accent-[#0a6ed1] cursor-pointer"/>
+                      <input type="checkbox" checked={isSelected} disabled={r.alreadyConfirmed}
+                        onChange={() => toggleRow(key)} className="w-4 h-4 accent-[#0a6ed1] cursor-pointer disabled:cursor-not-allowed"/>
                     </td>
-                    <td className="py-3 px-3 font-semibold text-[#32363a]">{r.itemNo || '—'}</td>
+                    <td className="py-3 px-3 font-semibold text-[#32363a]">
+                      {r.itemNo || '—'}
+                      {r.alreadyConfirmed && (
+                        <span className="ml-2 text-[10px] font-bold text-[#16a34a] bg-[#e8f5e9] px-1.5 py-0.5 rounded">Confirmed</span>
+                      )}
+                    </td>
                     <td className="py-3 px-3">
                       <div className="font-semibold text-[#0a6ed1] text-[12px]">{r.materialNo || '—'}</div>
                       <div className="text-[#6a6d70] text-[11px] truncate max-w-[160px]">{r.materialDesc || ''}</div>
@@ -340,7 +355,7 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
       )}
 
       <div className="px-4 sm:px-6 lg:px-10 py-4 border-t border-[#e5e5e5] flex items-center justify-between bg-white shadow-[0_-2px_8px_rgba(0,0,0,0.04)]">
-        <span className="text-[13px] text-[#6a6d70]">{selected.size} of {filteredRows.length} selected</span>
+        <span className="text-[13px] text-[#6a6d70]">{selected.size} of {selectableIdx.length} selectable</span>
         <button onClick={handleSubmitClick} disabled={selected.size === 0 || submitting}
           className="flex items-center gap-2 px-6 h-10 text-[14px] font-semibold text-white bg-[#0a6ed1] rounded-lg hover:bg-[#085caf] transition-all shadow-md disabled:opacity-40 disabled:cursor-not-allowed">
           {submitting && <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"/>}
@@ -620,7 +635,7 @@ export default function PurchaseOrder() {
   const handleCreateAsn = async () => {
     if (!agreement) return
     const poNum = agreement.poNo || agreement.id
-    const eligibleItems = (agreement.items || []).filter(i => i.status !== 'Confirmation Required')
+    const eligibleItems = (agreement.items || []).filter(isConfirmedItem)
     try {
       const pdirRefs = await purchaseOrderApi.getPdirRefs(poNum)
       navigate('/create-asn', { state: { agreement: { ...agreement, poNo: poNum, items: eligibleItems }, pdirRefs } })
@@ -881,7 +896,7 @@ export default function PurchaseOrder() {
                       </button>
                       {asnDisabled(agreement.items) && (
                         <div className="absolute bottom-full left-0 mb-2 px-3 py-1.5 bg-[#32363a] text-white text-[12px] rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg">
-                          All items need confirmation before creating ASN
+                          Confirm at least one item before creating ASN
                           <div className="absolute top-full left-4 border-4 border-transparent border-t-[#32363a]"/>
                         </div>
                       )}

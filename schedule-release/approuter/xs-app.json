@@ -1,6 +1,6 @@
 {
   "welcomeFile": "/srui/index.html",
-  "authenticationMethod": "route",
+  "authenticationMethod": "none",
   "routes": [
     {
       "source": "^/sap/opu/odata/(.*)$",

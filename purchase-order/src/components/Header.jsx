@@ -39,7 +39,7 @@ export default function Header({
         </div>
 
         <div className="flex items-center gap-2.5 sm:gap-3">
-          <button
+          {/* <button
             type="button"
             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#f3f4f6] text-[#6b7280] transition-colors cursor-pointer"
             title="Search"
@@ -48,7 +48,7 @@ export default function Header({
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-          </button>
+          </button> */}
 
           {/* User Initials Avatar */}
           <div className="w-8 h-8 rounded-full bg-[#dbeafe] text-[#1d4ed8] font-bold text-[13px] flex items-center justify-center border border-[#bfdbfe]">
