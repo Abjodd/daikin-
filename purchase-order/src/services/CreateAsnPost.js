@@ -210,11 +210,20 @@ export async function postCreateAsn({
 
   console.log('[ASN] Creation response:', data)
 
+  // Map backend property ASNNUMBER (uppercase from HTTP service response), Asnnumber, or AsnNum
+  const asnNumber =
+    data.ASNNUMBER ||
+    data.Asnnumber ||
+    data.AsnNum ||
+    data.asnNumber ||
+    data.asnnum ||
+    ''
+
   return {
     ...data,
-    AsnNum: data.Asnnumber || data.AsnNum || '',
-    FisYear: data.FisYear || String(new Date().getFullYear()),
-    Po_No: poNo,
-    InvoiceNum: invoice.number,
+    AsnNum: asnNumber,
+    FisYear: data.FISYEAR || data.FisYear || String(new Date().getFullYear()),
+    Po_No: data.PURCHASEORDER || poNo,
+    InvoiceNum: data.INVOICE || invoice.number,
   }
 }
