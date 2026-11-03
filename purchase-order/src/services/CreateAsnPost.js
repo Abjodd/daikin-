@@ -152,28 +152,28 @@ export async function postCreateAsn({
     items,
   }
 
-  // 3. Fetch CSRF token from HTTP service
-  const tokenRes = await fetch(ASN_CREATE_URL, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      'X-CSRF-Token': 'Fetch',
-    },
-    credentials: 'include',
-  })
+  // // 3. Fetch CSRF token from HTTP service
+  // const tokenRes = await fetch(ASN_CREATE_URL, {
+  //   method: 'GET',
+  //   headers: {
+  //     Accept: 'application/json',
+  //     'X-CSRF-Token': 'Fetch',
+  //   },
+  //   credentials: 'include',
+  // })
 
-  if (!tokenRes.ok) {
-    throw new Error(
-      `Could not fetch CSRF token: ${tokenRes.status}`
-    )
-  }
+  // if (!tokenRes.ok) {
+  //   throw new Error(
+  //     `Could not fetch CSRF token: ${tokenRes.status}`
+  //   )
+  // }
 
-  const csrfToken =
-    tokenRes.headers.get('x-csrf-token') || ''
+  // const csrfToken =
+  //   tokenRes.headers.get('x-csrf-token') || ''
 
-  if (!csrfToken) {
-    throw new Error('CSRF token was not returned by SAP')
-  }
+  // if (!csrfToken) {
+  //   throw new Error('CSRF token was not returned by SAP')
+  // }
 
   // 4. Call custom HTTP service
   const response = await fetch(ASN_CREATE_URL, {
@@ -181,7 +181,7 @@ export async function postCreateAsn({
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
-      'X-CSRF-Token': csrfToken,
+      // 'X-CSRF-Token': csrfToken,
     },
     credentials: 'include',
     body: JSON.stringify(payload),
