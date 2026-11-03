@@ -385,15 +385,43 @@ export default function CreateASN() {
     }
   }, [poNo])
 
+  // Normalize any user input date ('YYYY-MM-DD', 'DD.MM.YYYY', 'MMM DD, YYYY') to 'YYYY-MM-DD'
+  const toIsoDate = (val) => {
+    if (!val) return ''
+    const s = String(val).trim()
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+    if (s.includes('.')) {
+      const parts = s.split('.')
+      if (parts.length === 3 && parts[2].length === 4) {
+        return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`
+      }
+    }
+    // Handle strings like "Oct 26, 2026"
+    const dt = new Date(s + ' 12:00:00')
+    if (!isNaN(dt)) {
+      const y = dt.getFullYear()
+      const m = String(dt.getMonth() + 1).padStart(2, '0')
+      const d = String(dt.getDate()).padStart(2, '0')
+      return `${y}-${m}-${d}`
+    }
+    return s
+  }
+
   // Filter items by material search and date
   const filteredItems = useMemo(() => {
     const q = (materialSearch || '').trim().toUpperCase()
+    const fromIso = toIsoDate(shipmentFromDate)
+    const toIso = toIsoDate(shipmentToDate)
+
     return items.filter((item) => {
       const matNum = (item.materialNumber || '').toUpperCase()
       const matName = (item.materialName || '').toUpperCase()
       const matchMat = !q || matNum.includes(q) || matName.includes(q)
-      const matchFrom = !shipmentFromDate || (item.shipmentDateIso || '') >= shipmentFromDate
-      const matchTo = !shipmentToDate || (item.shipmentDateIso || '') <= shipmentToDate
+
+      const itemShipIso = item.shipmentDateIso || toIsoDate(item.shipmentDate)
+      const matchFrom = !fromIso || !itemShipIso || itemShipIso >= fromIso
+      const matchTo = !toIso || !itemShipIso || itemShipIso <= toIso
+
       return matchMat && matchFrom && matchTo
     })
   }, [items, materialSearch, shipmentFromDate, shipmentToDate])
@@ -486,8 +514,22 @@ export default function CreateASN() {
     }
   }
 
+  const currentCompany = header
+    ? `${header.companyCode}${header.companyCodeName ? ` (${header.companyCodeName})` : ''}`
+    : undefined
+
+  const currentSupplier = header
+    ? (header.vendor ? `${header.vendor}${header.vendorNo && !header.vendor.includes(header.vendorNo) ? ` (${header.vendorNo})` : ''}` : header.vendorNo)
+    : undefined
+
+  const currentLocation = header?.vendorAddress || header?.plantDesc || plantDesc
+
   return (
-    <PageLayout>
+    <PageLayout
+      companyCode={currentCompany}
+      supplierName={currentSupplier}
+      supplierLocation={currentLocation}
+    >
       <div className="bg-[#f5f6f7] min-h-[calc(100vh-84px)] flex flex-col">
         {/* Top Header Strip with Back Button, Centered Title, and Action Buttons */}
         <div className="relative flex flex-wrap items-center justify-between px-3 sm:px-6 py-2.5 border-b border-[#e5e7eb] bg-white gap-2">
@@ -720,20 +762,11 @@ export default function CreateASN() {
                 <label className="block text-[12px] font-semibold text-[#1f2937] mb-1">Shipment From Date</label>
                 <div className="relative">
                   <input
-                    type="text"
-                    value={shipmentFromDate}
+                    type="date"
+                    value={toIsoDate(shipmentFromDate)}
                     onChange={(e) => setShipmentFromDate(e.target.value)}
-                    placeholder="e.g. 31.12.2026"
-                    className="h-8 w-full sm:w-36 md:w-40 px-3 pr-8 text-[13px] border border-[#d1d5db] rounded-lg bg-white outline-none focus:border-[#0a6ed1]"
+                    className="h-8 w-full sm:w-36 md:w-40 px-2.5 text-[13px] border border-[#d1d5db] rounded-lg bg-white outline-none focus:border-[#0a6ed1]"
                   />
-                  <div className="absolute right-2.5 top-2 text-[#9ca3af] pointer-events-none">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                      <line x1="16" y1="2" x2="16" y2="6" />
-                      <line x1="8" y1="2" x2="8" y2="6" />
-                      <line x1="3" y1="10" x2="21" y2="10" />
-                    </svg>
-                  </div>
                 </div>
               </div>
 
@@ -742,20 +775,11 @@ export default function CreateASN() {
                 <label className="block text-[12px] font-semibold text-[#1f2937] mb-1">To Date</label>
                 <div className="relative">
                   <input
-                    type="text"
-                    value={shipmentToDate}
+                    type="date"
+                    value={toIsoDate(shipmentToDate)}
                     onChange={(e) => setShipmentToDate(e.target.value)}
-                    placeholder="e.g. 31.12.2026"
-                    className="h-8 w-full sm:w-36 md:w-40 px-3 pr-8 text-[13px] border border-[#d1d5db] rounded-lg bg-white outline-none focus:border-[#0a6ed1]"
+                    className="h-8 w-full sm:w-36 md:w-40 px-2.5 text-[13px] border border-[#d1d5db] rounded-lg bg-white outline-none focus:border-[#0a6ed1]"
                   />
-                  <div className="absolute right-2.5 top-2 text-[#9ca3af] pointer-events-none">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                      <line x1="16" y1="2" x2="16" y2="6" />
-                      <line x1="8" y1="2" x2="8" y2="6" />
-                      <line x1="3" y1="10" x2="21" y2="10" />
-                    </svg>
-                  </div>
                 </div>
               </div>
 

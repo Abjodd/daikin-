@@ -1,12 +1,15 @@
 import { useState } from 'react'
 
 export default function Header({
-  companyCode = 'DSAL (Daikin Airconditioning India Private Limited)',
-  supplierName = 'Kunstocom(India) Ltd',
-  supplierLocation = 'NEEMRANA(alwar)',
+  companyCode = '1000',
+  supplierName = '',
+  supplierLocation = '',
   onBack,
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false)
+
+  // Extract short company code tag (e.g. "1810" from "1810 (IN Company Code)" or just "1810")
+  const shortCompany = String(companyCode || '').split(/[\s(]/)[0] || '1000'
 
   return (
     <header className="bg-white border-b border-[#e5e5e5] select-none flex-shrink-0">
@@ -76,11 +79,17 @@ export default function Header({
       {/* iPad / Tablet Strip (sm to lg screens) */}
       <div className="hidden sm:flex lg:hidden items-center justify-between gap-4 px-4 py-2 bg-[#f8fafc] border-b border-[#e2e8f0] text-[11.5px] text-[#475569]">
         <div className="flex items-center gap-2 truncate">
-          <span className="font-bold text-[#0a6ed1] bg-[#eff6ff] px-2 py-0.5 rounded border border-[#bfdbfe]/60">DSAL</span>
+          <span className="font-bold text-[#0a6ed1] bg-[#eff6ff] px-2 py-0.5 rounded border border-[#bfdbfe]/60">
+            {shortCompany}
+          </span>
           <span className="text-[#94a3b8]">|</span>
-          <span className="font-semibold text-[#1e293b] truncate">{supplierName}</span>
-          <span className="text-[#94a3b8]">|</span>
-          <span className="text-[#64748b] truncate">{supplierLocation}</span>
+          <span className="font-semibold text-[#1e293b] truncate">{supplierName || '—'}</span>
+          {supplierLocation && (
+            <>
+              <span className="text-[#94a3b8]">|</span>
+              <span className="text-[#64748b] truncate">{supplierLocation}</span>
+            </>
+          )}
         </div>
         <span className="text-[10px] font-bold text-[#0a6ed1] bg-[#eff6ff] px-2 py-0.5 rounded-full flex-shrink-0">
           Active
@@ -92,15 +101,19 @@ export default function Header({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5 truncate">
             <span className="font-bold text-[#0a6ed1] bg-[#eff6ff] px-1.5 py-0.5 rounded border border-[#bfdbfe]/60 text-[10px]">
-              DSAL
+              {shortCompany}
             </span>
             <span className="font-semibold text-[#1e293b] truncate">
-              {supplierName.replace(/\s*\(India\)\s*/i, '').replace(/\s*Ltd\.?/i, '')}
+              {supplierName.replace(/\s*\(India\)\s*/i, '').replace(/\s*Ltd\.?/i, '') || '—'}
             </span>
-            <span className="text-[#94a3b8]">·</span>
-            <span className="text-[#64748b] truncate">
-              {supplierLocation.replace(/\(.*?\)/g, '').trim()}
-            </span>
+            {supplierLocation && (
+              <>
+                <span className="text-[#94a3b8]">·</span>
+                <span className="text-[#64748b] truncate">
+                  {supplierLocation.replace(/\(.*?\)/g, '').trim()}
+                </span>
+              </>
+            )}
           </div>
 
           <button

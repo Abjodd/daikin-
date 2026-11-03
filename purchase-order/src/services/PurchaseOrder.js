@@ -25,11 +25,29 @@ export function sapDateToDisplay(s) {
 
 export function sapDateToIso(s) {
   if (!s || s === '00000000') return ''
-  const clean = String(s).replace(/-/g, '')
-  if (clean.length === 8) {
+  const strVal = String(s).trim()
+  // Handle /Date(ms)/
+  const m = /\/Date\((\d+)\)\//.exec(strVal)
+  if (m) {
+    const d = new Date(Number(m[1]))
+    if (!isNaN(d)) {
+      return d.toISOString().slice(0, 10)
+    }
+  }
+  // Handle YYYYMMDD
+  const clean = strVal.replace(/-/g, '')
+  if (/^\d{8}$/.test(clean)) {
     return `${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}`
   }
-  return s
+  // Handle human strings like "Oct 26, 2026"
+  const parsed = new Date(strVal + ' 12:00:00')
+  if (!isNaN(parsed)) {
+    const y = parsed.getFullYear()
+    const mo = String(parsed.getMonth() + 1).padStart(2, '0')
+    const dy = String(parsed.getDate()).padStart(2, '0')
+    return `${y}-${mo}-${dy}`
+  }
+  return ''
 }
 
 function trimNum(s) {
@@ -426,20 +444,26 @@ function sapODataDate(value) {
 }
 
 function mapHeader(raw) {
+  const companyCode = str(raw.CompanyCode || '1000')
+  const companyCodeName = str(raw.CompanyCodeName || raw.CompanyCode || '')
+  const vendorNo = str(raw.Supplier || raw.Vendor || raw.Vendor_No)
+  const vendorName = str(raw.SupplierFullName || raw.Vendor_Name || raw.Supplier || raw.Vendor)
+  const vendorAddr = str(raw.supplieraddress || raw.SupplierAddress || '')
+  const plantCode = str(raw.Plant || raw.SupplyingPlant || '')
+  const plantDesc = str(raw.Plantname || raw.Plant_Desc || raw.SupplyingPlant || raw.SupplierName || '')
+
   return {
     id: str(raw.PurchaseOrder || raw.Purchaseorder || raw.Po_No),
 
     poNo: str(raw.PurchaseOrder || raw.Purchaseorder || raw.Po_No),
 
-    companyCode: str(raw.CompanyCode || '1000'),
+    companyCode,
 
-    plant: str(raw.Plant),
+    companyCodeName,
 
-    plantName: str(
-      raw.Plant_Desc ||
-      raw.SupplyingPlant ||
-      raw.SupplierName
-    ),
+    plant: plantCode,
+
+    plantName: plantDesc,
 
     date: raw.PurchaseOrderDate
       ? sapODataDate(raw.PurchaseOrderDate)
@@ -447,9 +471,11 @@ function mapHeader(raw) {
 
     type: str(raw.PurchaseOrderType || raw.Order_Type),
 
-    vendor: str(raw.Supplier || raw.Vendor || raw.Vendor_Name),
+    vendor: vendorName,
 
-    vendorNo: str(raw.Supplier || raw.Vendor || raw.Vendor_No),
+    vendorNo,
+
+    vendorAddress: vendorAddr,
 
     currency: str(
       raw.DocumentCurrency ||
@@ -594,6 +620,7 @@ function mapPoItem(raw) {
     plant: str(raw.Plant),
 
     plantDesc: str(
+      raw.Plantname ||
       raw.Plant_Desc ||
       raw.Plant
     ),
@@ -639,6 +666,25 @@ function mapPoItem(raw) {
 function mapPoDetail(header, items = [], confirmedMap = new Map(), schs = []) {
   const mappedItems = items.map(raw => {
     const it = mapPoItem(raw)
+
+    // Match schedule line delivery date from ZCDS_PURCHASEITEM_SCH
+    const itemSchs = schs.filter(s =>
+      toItem4(s.PurchaseOrderItem) === toItem4(raw.PurchaseOrderItem) ||
+      str(s.PurchaseOrderItem) === str(raw.PurchaseOrderItem)
+    )
+    if (itemSchs.length > 0) {
+      const dates = itemSchs
+        .map(s => s.ScheduleLineDeliveryDate)
+        .filter(Boolean)
+      if (dates.length > 0) {
+        it.deliveryDate = sapODataDate(dates[0])
+        it.deliveryDateIso = sapDateToIso(dates[0])
+      }
+    }
+    if (!it.deliveryDateIso && it.deliveryDate) {
+      it.deliveryDateIso = sapDateToIso(it.deliveryDate)
+    }
+
     // Confirmation state comes from ZP_PO_CONFIRM, not from SAP release quantities
     if (it.status !== 'Completed' && it.status !== 'Blocked') {
       it.status = itemConfirmStatus(raw, schs, confirmedMap)
@@ -648,22 +694,34 @@ function mapPoDetail(header, items = [], confirmedMap = new Map(), schs = []) {
     return it
   })
 
+  const companyCode = str(header.CompanyCode || '1000')
+  const companyCodeName = str(header.CompanyCodeName || header.CompanyCode || '')
+  const vendorNo = str(header.Supplier)
+  const vendorName = str(header.SupplierFullName || header.Supplier)
+  const vendorAddr = str(header.supplieraddress || header.SupplierAddress || '')
+  const firstItemPlant = items[0]?.Plant ? str(items[0].Plant) : ''
+  const firstItemPlantDesc = items[0]?.plantDesc || items[0]?.Plantname || str(header.SupplyingPlant || '')
+
   return {
     id: str(header.PurchaseOrder),
 
     poNo: str(header.PurchaseOrder),
 
-    companyCode: str(header.CompanyCode || '1000'),
+    companyCode,
 
-    vendorNo: str(header.Supplier),
+    companyCodeName,
 
-    vendor: str(header.Supplier),
+    vendorNo,
+
+    vendor: vendorName,
+
+    vendorAddress: vendorAddr,
 
     date: sapODataDate(header.PurchaseOrderDate),
 
-    plant: str(items[0]?.Plant || ''),
+    plant: firstItemPlant || str(header.SupplyingPlant || ''),
 
-    plantDesc: str(header.SupplyingPlant),
+    plantDesc: firstItemPlantDesc || str(header.SupplyingPlant || ''),
 
     buyerName: str(header.CreatedByUser),
 
@@ -782,7 +840,7 @@ export const purchaseOrderApi = {
           item.Supplier,
           {
             lifnr: item.Supplier,
-            name: item.Supplier,
+            name: str(item.SupplierFullName || item.Supplier),
           },
         ])
       ).values(),
@@ -806,20 +864,52 @@ export const purchaseOrderApi = {
       url += `&$filter=${encodeURIComponent(`Supplier eq '${vendorNo}'`)}`
     }
 
-    const res = await fetch(url, {
-      headers: {
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-    })
+    const [headerRes, itemRes] = await Promise.all([
+      fetch(url, {
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }),
+      fetch(`${BASE}/ZCDS_PURCHASEITEM?$select=PurchaseOrder,Plant,Plantname&$format=json`, {
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }).catch(() => null),
+    ])
 
-    if (!res.ok) {
+    if (!headerRes.ok) {
       throw new Error('Failed to load purchase orders')
     }
 
-    const json = await res.json()
+    const json = await headerRes.json()
+    const headerResults = json.d?.results || []
 
-    return (json.d?.results || []).map(mapHeader)
+    // Map plant information from item view if items returned
+    const itemMap = new Map()
+    if (itemRes && itemRes.ok) {
+      try {
+        const itemJson = await itemRes.json()
+        for (const it of itemJson.d?.results || []) {
+          const po = str(it.PurchaseOrder)
+          if (!itemMap.has(po) && (it.Plant || it.Plantname)) {
+            itemMap.set(po, {
+              plant: str(it.Plant),
+              plantName: str(it.Plantname || it.Plant),
+            })
+          }
+        }
+      } catch (e) {
+        console.warn('Could not load plant details for PO list:', e)
+      }
+    }
+
+    return headerResults.map(raw => {
+      const h = mapHeader(raw)
+      const itemInfo = itemMap.get(h.id) || itemMap.get(h.poNo)
+      if (itemInfo) {
+        if (!h.plant) h.plant = itemInfo.plant
+        if (!h.plantName || h.plantName === h.plant) h.plantName = itemInfo.plantName
+      }
+      return h
+    })
   },
 
   /**

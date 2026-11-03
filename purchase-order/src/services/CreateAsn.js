@@ -88,14 +88,24 @@ function mapItem(d) {
 }
 
 function mapHeader(d) {
+  const companyCode = str(d.CompanyCode || d.Companycode || '1000')
+  const companyCodeName = str(d.CompanyCodeName || d.Companycode || '')
+  const vendorNo = str(d.Supplier || d.Vendor_No || d.Vendor || '')
+  const vendorName = str(d.SupplierFullName || d.Vendor_Name || d.Supplier || d.Vendor || '')
+  const vendorAddr = str(d.supplieraddress || d.SupplierAddress || '')
+  const plant = str(d.Plant || d.SupplyingPlant || d.Werks || '')
+  const plantDesc = str(d.Plantname || d.Plant_Desc || d.SupplyingPlant || d.Plant || d.Werks || '')
+
   return {
     poNo:              str(d.PurchaseOrder || d.Po_No),
     id:                str(d.PurchaseOrder || d.Po_No),
-    companyCode:       str(d.CompanyCode || d.Companycode || '1000'),
-    vendorNo:          str(d.Supplier || d.Vendor_No || d.Vendor || ''),
-    vendor:            str(d.Supplier || d.Vendor_Name || d.Vendor || ''),
-    plant:             str(d.SupplyingPlant || d.Plant || d.Werks),
-    plantDesc:         str(d.Plant_Desc || d.SupplyingPlant || d.Plant || d.Werks),
+    companyCode,
+    companyCodeName,
+    vendorNo,
+    vendor:            vendorName,
+    vendorAddress:     vendorAddr,
+    plant,
+    plantDesc,
     buyerName:         str(d.CreatedByUser || d.Buyer_Name),
     purchaseGroupDesc: str(d.PurchasingGroup || d.Purchase_Group_Desc),
     currency:          str(d.DocumentCurrency || d.Currency || 'INR'),

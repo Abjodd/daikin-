@@ -7,8 +7,19 @@ export default function POlineitem() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  const poNo = location.state?.poNo || location.state?.agreement?.id || '7000037175'
+  const agreement = location.state?.agreement || null
+  const poNo = location.state?.poNo || agreement?.id || '7000037175'
   const itemNo = location.state?.item?.itemNo || location.state?.item?.ebelp || '10'
+
+  const currentCompany = agreement
+    ? `${agreement.companyCode}${agreement.companyCodeName ? ` (${agreement.companyCodeName})` : ''}`
+    : undefined
+
+  const currentSupplier = agreement
+    ? (agreement.vendor ? `${agreement.vendor}${agreement.vendorNo && !agreement.vendor.includes(agreement.vendorNo) ? ` (${agreement.vendorNo})` : ''}` : agreement.vendorNo)
+    : undefined
+
+  const currentLocation = agreement?.vendorAddress || agreement?.plantDesc || undefined
 
   const [scheduleLines, setScheduleLines] = useState(location.state?.scheduleLines || [])
   const [loading, setLoading] = useState(!location.state?.scheduleLines?.length)
@@ -43,7 +54,11 @@ export default function POlineitem() {
   }, [poNo, itemNo, location.state])
 
   return (
-    <PageLayout>
+    <PageLayout
+      companyCode={currentCompany}
+      supplierName={currentSupplier}
+      supplierLocation={currentLocation}
+    >
       <div className="bg-white min-h-[calc(100vh-84px)] flex flex-col">
         {/* Top Header Strip with Back Button and Centered PO Title */}
         <div className="relative flex items-center justify-between px-6 py-3 border-b border-[#e5e7eb] bg-white">

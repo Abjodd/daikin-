@@ -5,23 +5,28 @@ import { purchaseOrderApi } from '../services/PurchaseOrder.js'
 import StatusBadge from '../components/StatusBadge.jsx'
 
 // ─── DATE HELPERS ──────────────────────────────────────────────
-const ddmmyyyyToIso = (s) => {
+export const toStandardIso = (s) => {
   if (!s) return ''
-  const parts = s.split('.')
-  if (parts.length !== 3) return ''
-  const [d, m, y] = parts
-  if (!d || !m || !y) return ''
-  return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
-}
-const isoToDdmmyyyy = (s) => {
-  if (!s) return ''
-  const [y, m, d] = s.split('-')
-  if (!y || !m || !d) return ''
-  return `${d}.${m}.${y}`
-}
-const parseDdmmyyyy = (s) => {
-  const iso = ddmmyyyyToIso(s)
-  return iso ? new Date(iso) : null
+  const str = String(s).trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str
+
+  // Handle DD.MM.YYYY
+  if (str.includes('.')) {
+    const parts = str.split('.')
+    if (parts.length === 3 && parts[2].length === 4) {
+      return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`
+    }
+  }
+
+  // Handle Month Name e.g. "Oct 26, 2026"
+  const dt = new Date(str + ' 12:00:00')
+  if (!isNaN(dt)) {
+    const y = dt.getFullYear()
+    const m = String(dt.getMonth() + 1).padStart(2, '0')
+    const d = String(dt.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
+  return ''
 }
 
 // ─── BUTTON LOGIC ──────────────────────────────────────────────
@@ -452,8 +457,12 @@ function SidebarContent({
                     <span className="text-[11px] text-[#6a6d70] bg-[#f0f0f0] px-2 py-0.5 rounded font-medium">{a.type}</span>
                   </div>
                   <div className="flex items-center justify-between text-[12px] text-[#6a6d70]">
-                    <span>{a.plant} · {a.plantName}</span>
-                    <span>{a.date}</span>
+                    <span className="truncate pr-2">
+                      {a.plantName
+                        ? (a.plantName.includes(a.plant) ? a.plantName : `${a.plantName} (${a.plant || ''})`)
+                        : (a.plant || '—')}
+                    </span>
+                    <span className="flex-shrink-0">{a.date}</span>
                   </div>
                 </button>
               )
@@ -601,9 +610,11 @@ export default function PurchaseOrder() {
       const q = searchQuery.trim().toLowerCase()
       const matchSearch = !q ||
         (a.id || '').toLowerCase().includes(q) ||
+        (a.poNo || '').toLowerCase().includes(q) ||
         (a.plantName || '').toLowerCase().includes(q) ||
         (a.plant || '').toLowerCase().includes(q) ||
-        (a.vendor || '').toLowerCase().includes(q)
+        (a.vendor || '').toLowerCase().includes(q) ||
+        (a.vendorNo || '').toLowerCase().includes(q)
       const matchPlant = selectedPlants.length === 0 || selectedPlants.includes(a.plant)
       return matchSearch && matchPlant
     })
@@ -611,15 +622,29 @@ export default function PurchaseOrder() {
 
   const dateError = useMemo(() => {
     if (!fromDate || !toDate) return null
-    const f = parseDdmmyyyy(fromDate), t = parseDdmmyyyy(toDate)
-    if (!f || !t) return null
-    return f > t ? 'From Date must be earlier than To Date' : null
+    const fIso = toStandardIso(fromDate)
+    const tIso = toStandardIso(toDate)
+    if (!fIso || !tIso) return null
+    return fIso > tIso ? 'From Date must be earlier than To Date' : null
   }, [fromDate, toDate])
 
   const filteredItems = useMemo(() => {
-    if (!agreement) return []
-    return agreement.items || []
-  }, [agreement])
+    if (!agreement?.items) return []
+    const fromIso = toStandardIso(fromDate)
+    const toIso = toStandardIso(toDate)
+
+    if (!fromIso && !toIso) return agreement.items
+
+    return agreement.items.filter(item => {
+      const itemIso = item.deliveryDateIso || toStandardIso(item.deliveryDate)
+      // If item has no delivery date, keep it visible
+      if (!itemIso) return true
+
+      if (fromIso && itemIso < fromIso) return false
+      if (toIso && itemIso > toIso) return false
+      return true
+    })
+  }, [agreement, fromDate, toDate])
 
   const handleSelectAgreement = useCallback((id) => {
     setSelectedAgreementId(id)
@@ -667,8 +692,22 @@ export default function PurchaseOrder() {
     activeSupplier, handleChangeSupplier: () => setShowF4(true),
   }
 
+  const currentCompany = agreement
+    ? `${agreement.companyCode}${agreement.companyCodeName ? ` (${agreement.companyCodeName})` : ''}`
+    : undefined
+
+  const currentSupplier = agreement
+    ? (agreement.vendor ? `${agreement.vendor}${agreement.vendorNo && !agreement.vendor.includes(agreement.vendorNo) ? ` (${agreement.vendorNo})` : ''}` : agreement.vendorNo)
+    : activeSupplier || undefined
+
+  const currentLocation = agreement?.vendorAddress || agreement?.plantDesc || undefined
+
   return (
-    <PageLayout>
+    <PageLayout
+      companyCode={currentCompany}
+      supplierName={currentSupplier}
+      supplierLocation={currentLocation}
+    >
       <div className="bg-[#f5f6f7] min-h-[calc(100vh-64px)]">
         {showF4 && (
           <F4SupplierPicker
@@ -796,18 +835,24 @@ export default function PurchaseOrder() {
                     <div className="flex flex-wrap gap-3 items-end">
                       <div>
                         <label className="block text-[12px] text-[#6a6d70] mb-1.5 font-semibold">Delivery From Date</label>
-                        <input type="date" value={ddmmyyyyToIso(fromDate)} onChange={e => setFromDate(isoToDdmmyyyy(e.target.value))}
+                        <input
+                          type="date"
+                          value={fromDate}
+                          onChange={e => setFromDate(e.target.value)}
                           className={`w-full h-9 pl-3 pr-2 text-[13px] border rounded-lg bg-white focus:outline-none focus:ring-2 transition-all ${dateError ? 'border-[#cc1c14] focus:ring-[#cc1c14]/20' : 'border-[#d9d9d9] focus:border-[#0a6ed1] focus:ring-[#0a6ed1]/20'}`}
                         />
                       </div>
                       <div>
                         <label className="block text-[12px] text-[#6a6d70] mb-1.5 font-semibold">To Date</label>
-                        <input type="date" value={ddmmyyyyToIso(toDate)} onChange={e => setToDate(isoToDdmmyyyy(e.target.value))}
+                        <input
+                          type="date"
+                          value={toDate}
+                          onChange={e => setToDate(e.target.value)}
                           className={`w-full h-9 pl-3 pr-2 text-[13px] border rounded-lg bg-white focus:outline-none focus:ring-2 transition-all ${dateError ? 'border-[#cc1c14] focus:ring-[#cc1c14]/20' : 'border-[#d9d9d9] focus:border-[#0a6ed1] focus:ring-[#0a6ed1]/20'}`}
                         />
                       </div>
                       <button onClick={() => { setFromDate(''); setToDate('') }}
-                        className="h-9 px-4 text-[13px] font-semibold text-[#cc1c14] bg-[#fce8e6] rounded-lg hover:bg-[#fad6d3] transition-all self-end">
+                        className="h-9 px-4 text-[13px] font-semibold text-[#cc1c14] bg-[#fce8e6] rounded-lg hover:bg-[#fad6d3] transition-all self-end cursor-pointer">
                         Clear
                       </button>
                     </div>
@@ -869,7 +914,9 @@ export default function PurchaseOrder() {
                                 {item.unitPrice && item.unitPrice !== '0.00' ? item.unitPrice : '—'}
                               </td>
 
-                              <td className="py-3.5 px-4 font-semibold text-[#16a34a]">{item.status}</td>
+                              <td className="py-3.5 px-4 font-semibold">
+                                <StatusBadge status={item.status} />
+                              </td>
 
                               <td className="py-3.5 px-3">
                                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
