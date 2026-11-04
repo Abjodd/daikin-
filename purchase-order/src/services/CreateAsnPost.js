@@ -227,3 +227,60 @@ export async function postCreateAsn({
     InvoiceNum: data.INVOICE || invoice.number,
   }
 }
+
+/**
+ * Fetch a CSRF token from the OData service root.
+ */
+async function fetchODataCsrfToken() {
+  const res = await fetch(`${ODATA_BASE}/`, {
+    method: 'GET',
+    headers: { Accept: 'application/json', 'X-CSRF-Token': 'Fetch' },
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error(`Could not fetch CSRF token: HTTP ${res.status}`)
+  const token = res.headers.get('x-csrf-token')
+  if (!token) throw new Error('CSRF token was not returned by SAP')
+  return token
+}
+
+/**
+ * After the HTTP service returns the ASN number, persist the ASN into
+ * ZP_PUR_ASN_HEAD (1 call) and ZP_PUR_ASN_ITEM (1 call per selected item).
+ */
+export async function saveAsnToOData({
+  asnNumber,
+  poNo,
+  invoice,
+  selectedItems,
+  header = {},
+}) {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 200))
+    return { head: {}, items: [] }
+  }
+  if (!asnNumber) throw new Error('ASN number is missing, cannot post to OData')
+
+  // Reuse the same payload builder, then stamp the ASN number from the HTTP service
+  const { head, items } = buildAsnPayload({ poNo, invoice, selectedItems, header })
+  head.Asnnumber = str(asnNumber)
+  const itemPayloads = items.map(it => ({ ...it, Asnnumber: str(asnNumber) }))
+
+  const csrfToken = await fetchODataCsrfToken()
+
+  // 1. Head first
+  const headResult = await postJson(`${ODATA_BASE}/ZP_PUR_ASN_HEAD`, csrfToken, head)
+
+  // 2. Then all items (sequential keeps ASN item order and makes errors easy to trace)
+  const itemResults = []
+  for (const item of itemPayloads) {
+    try {
+      itemResults.push(await postJson(`${ODATA_BASE}/ZP_PUR_ASN_ITEM`, csrfToken, item))
+    } catch (e) {
+      e.message = `ASN item ${item.Asnitem} (PO item ${item.Poitem}) failed: ${e.message}`
+      throw e
+    }
+  }
+
+  console.log('[ASN] OData saved:', { head: headResult, items: itemResults })
+  return { head: headResult, items: itemResults }
+}

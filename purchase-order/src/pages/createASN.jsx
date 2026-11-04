@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import PageLayout from '../layouts/PageLayout.jsx'
 import { createAsnService } from '../services/CreateAsn.js'
-import { postCreateAsn } from '../services/CreateAsnPost.js'
+import { postCreateAsn, saveAsnToOData } from '../services/CreateAsnPost.js'
 import { uploadAllAttachments } from '../services/UploadAttachment.js'
 
 // ─── CONSTANTS ──────────────────────────────────────────────────
@@ -27,6 +27,18 @@ const PACKAGING_TYPES = [
   'Tote Boxes',
   'ESD Trays',
 ]
+
+// ─── QTY RULES ──────────────────────────────────────────────────
+// Avl. ASN Qty can never be more than Conf. Qty - ASN Created
+const getMaxAvl = (it) =>
+  Math.max(0, (parseFloat(it.confQty) || 0) - (parseFloat(it.asnCreated) || 0))
+
+const isQtyExceeded = (it) => (parseFloat(it.avlAsnQty) || 0) > getMaxAvl(it) + 0.0001
+
+const isQtyInvalid = (it) => {
+  const q = parseFloat(it.avlAsnQty)
+  return !(q > 0) || isQtyExceeded(it)
+}
 
 // ─── TAX MISMATCH SWITCH (NO EMOJIS) ─────────────────────────────
 function TaxMismatchSwitch({ value, onChange }) {
@@ -111,7 +123,7 @@ function SplitBatchModal({ open, item, onClose, onSave }) {
 
   const handleSave = () => {
     if (rows.length === 0) {
-      onSave(item.itemNo, [])
+      onSave(item.rowId, [])
       onClose()
       return
     }
@@ -129,7 +141,7 @@ function SplitBatchModal({ open, item, onClose, onSave }) {
       return
     }
     onSave(
-      item.itemNo,
+      item.rowId,
       rows.map((r) => ({ ...r, quantity: parseInt(r.quantity, 10) }))
     )
     onClose()
@@ -339,7 +351,8 @@ export default function CreateASN() {
   const [header, setHeader] = useState(agreementFromState || null)
   const [items, setItems] = useState([])
   const [pdirRefs, setPdirRefs] = useState([])
-  const [selectedItemNos, setSelectedItemNos] = useState([])
+  // Selection is tracked by rowId (unique per item + schedule line)
+  const [selectedRowIds, setSelectedRowIds] = useState([])
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -352,6 +365,7 @@ export default function CreateASN() {
   const [splitBatchItem, setSplitBatchItem] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [successModal, setSuccessModal] = useState(null)
+  const [saveWarning, setSaveWarning] = useState(null)
 
   // Fetch ASN data on load
   useEffect(() => {
@@ -426,36 +440,35 @@ export default function CreateASN() {
     })
   }, [items, materialSearch, shipmentFromDate, shipmentToDate])
 
-  const allSelected = filteredItems.length > 0 && filteredItems.every((i) => selectedItemNos.includes(i.itemNo))
+  const allSelected =
+    filteredItems.length > 0 && filteredItems.every((i) => selectedRowIds.includes(i.rowId))
 
   const toggleSelectAll = () => {
     if (allSelected) {
-      setSelectedItemNos([])
+      setSelectedRowIds([])
     } else {
-      setSelectedItemNos(filteredItems.map((i) => i.itemNo))
+      setSelectedRowIds(filteredItems.map((i) => i.rowId))
     }
   }
 
-  const toggleSelectOne = (itemNo) => {
-    if (selectedItemNos.includes(itemNo)) {
-      setSelectedItemNos(selectedItemNos.filter((n) => n !== itemNo))
-    } else {
-      setSelectedItemNos([...selectedItemNos, itemNo])
-    }
+  const toggleSelectOne = (rowId) => {
+    setSelectedRowIds((prev) =>
+      prev.includes(rowId) ? prev.filter((n) => n !== rowId) : [...prev, rowId]
+    )
   }
 
-  const updateItem = (itemNo, field, val) => {
-    setItems(items.map((it) => (it.itemNo === itemNo ? { ...it, [field]: val } : it)))
+  const updateItem = (rowId, field, val) => {
+    setItems((prev) => prev.map((it) => (it.rowId === rowId ? { ...it, [field]: val } : it)))
   }
 
-  const handleSplitBatchSave = (itemNo, batches) => {
-    setItems(items.map((it) => (it.itemNo === itemNo ? { ...it, batches } : it)))
+  const handleSplitBatchSave = (rowId, batches) => {
+    setItems((prev) => prev.map((it) => (it.rowId === rowId ? { ...it, batches } : it)))
   }
 
   // Selected items array for the Top-Right Card
   const selectedItems = useMemo(() => {
-    return items.filter((i) => selectedItemNos.includes(i.itemNo))
-  }, [items, selectedItemNos])
+    return items.filter((i) => selectedRowIds.includes(i.rowId))
+  }, [items, selectedRowIds])
 
   // Compute Invoice Value (Vendor) automatically based on selected items
   const invoiceValueVendor = useMemo(() => {
@@ -469,37 +482,37 @@ export default function CreateASN() {
 
   // Create ASN Submission (Save or Save as Draft)
   const handleSubmitAsn = async (isDraft = false) => {
-    if (selectedItemNos.length === 0) {
+    if (selectedRowIds.length === 0) {
       alert('Please select at least one item from the table.')
       return
     }
+
+    const badItem = selectedItems.find(isQtyInvalid)
+    if (badItem) {
+      alert(
+        `Item ${badItem.itemNo} (schedule line ${badItem.schLine}): Avl. ASN Qty must be greater than 0 and not more than ${getMaxAvl(badItem)}.`
+      )
+      return
+    }
+
     if (!invoiceNumber.trim() && !isDraft) {
       alert('Invoice Number is required.')
       return
     }
 
     setSubmitting(true)
+    setSaveWarning(null)
     try {
-      const res = await postCreateAsn({
-        poNo,
-        invoice: {
-          number: invoiceNumber || 'DRAFT',
-          date: invoiceDate,
-          amount: invoiceAmount || invoiceValueVendor,
-        },
-        selectedItems,
-        header,
-      })
-
-      if (generalAttachments.length > 0 || pdirAttachments.length > 0) {
-        await uploadAllAttachments({
-          asnNum: res.AsnNum,
-          fisYear: res.FisYear,
-          generalAttachments,
-          pdirAttachments,
-        })
+      const invoice = {
+        number: invoiceNumber || 'DRAFT',
+        date: invoiceDate,
+        amount: invoiceAmount || invoiceValueVendor,
       }
 
+      // 1. HTTP service creates the ASN number
+      const res = await postCreateAsn({ poNo, invoice, selectedItems, header })
+
+      // 2. Show the success dialog first
       setSuccessModal({
         asnNum: res.AsnNum,
         poNo: res.Po_No || poNo,
@@ -507,6 +520,40 @@ export default function CreateASN() {
         count: selectedItems.length,
         isDraft,
       })
+
+      // 3. Persist to ZP_PUR_ASN_HEAD / ZP_PUR_ASN_ITEM (failure must not hide the ASN number)
+      const warnings = []
+      try {
+        await saveAsnToOData({
+          asnNumber: res.AsnNum,
+          poNo,
+          invoice,
+          selectedItems,
+          header,
+        })
+      } catch (odataErr) {
+        console.error('[ASN] OData save failed:', odataErr)
+        warnings.push(`Saving ASN details failed: ${odataErr.message}`)
+      }
+
+      // 4. Attachments, in their own try/catch
+      if (generalAttachments.length > 0 || pdirAttachments.length > 0) {
+        try {
+          await uploadAllAttachments({
+            asnNum: res.AsnNum,
+            fisYear: res.FisYear,
+            generalAttachments,
+            pdirAttachments,
+          })
+        } catch (upErr) {
+          console.error('[ASN] Attachment upload failed:', upErr)
+          warnings.push(`Attachment upload failed: ${upErr.message}`)
+        }
+      }
+
+      if (warnings.length) {
+        setSaveWarning(`ASN ${res.AsnNum} was created, but: ${warnings.join(' | ')}`)
+      }
     } catch (err) {
       alert('Failed to save ASN: ' + err.message)
     } finally {
@@ -683,7 +730,7 @@ export default function CreateASN() {
                       const itemVal = (qty * parseFloat(it.supplierNetPrice || it.netPrice || 0)).toFixed(2)
 
                       return (
-                        <tr key={it.itemNo} className="hover:bg-[#fafbfc] whitespace-nowrap">
+                        <tr key={it.rowId} className="hover:bg-[#fafbfc] whitespace-nowrap">
                           <td className="py-2 px-2.5 font-bold text-[#1f2937]">{it.materialNumber}</td>
                           <td className="py-2 px-2.5 text-[#4b5563] max-w-[180px] truncate" title={it.materialName}>{it.materialName}</td>
                           <td className="py-2 px-2.5 font-semibold text-[#0a6ed1]">{it.netPrice} INR</td>
@@ -755,7 +802,7 @@ export default function CreateASN() {
         {/* TAB 1: ASN ITEMS TABLE */}
         {activeTab === 'info' && (
           <div className="flex-1 flex flex-col px-3 sm:px-6 pt-2 pb-6 min-h-0 min-w-0">
-            {/* Filter Bar (matching Screenshot 3, fully responsive) */}
+            {/* Filter Bar */}
             <div className="bg-white border border-[#e5e5e5] rounded-xl p-3 sm:px-5 sm:py-3 mb-4 shadow-sm flex flex-wrap items-end gap-3 sm:gap-4">
               {/* Shipment From Date */}
               <div className="w-full sm:w-auto">
@@ -825,6 +872,12 @@ export default function CreateASN() {
               </div>
             </div>
 
+            {error && (
+              <div className="bg-[#fee2e2] border border-[#fca5a5] text-[#b91c1c] rounded-lg p-3 text-[13px] mb-4">
+                {error}
+              </div>
+            )}
+
             {/* Main Horizontal Scrollable Table (20 Columns) */}
             <div className="bg-white border border-[#e5e5e5] rounded-xl shadow-sm overflow-hidden flex-1 flex flex-col min-h-0 min-w-0">
               <div className="overflow-x-auto overflow-y-auto flex-1 w-full">
@@ -871,17 +924,21 @@ export default function CreateASN() {
                     ) : filteredItems.length === 0 ? (
                       <tr>
                         <td colSpan={20} className="py-16 text-center text-[#6b7280]">
-                          No items match the current filters.
+                          {items.length === 0
+                            ? 'No items available for ASN creation.'
+                            : 'No items match the current filters.'}
                         </td>
                       </tr>
                     ) : (
                       filteredItems.map((item) => {
-                        const isSelected = selectedItemNos.includes(item.itemNo)
+                        const isSelected = selectedRowIds.includes(item.rowId)
                         const unit = item.totalUnit || 'NO'
+                        const maxAvl = getMaxAvl(item)
+                        const exceeded = isQtyExceeded(item)
 
                         return (
                           <tr
-                            key={item.itemNo}
+                            key={item.rowId}
                             className={`hover:bg-[#f9fafb] transition-colors whitespace-nowrap ${
                               isSelected ? 'bg-[#f0f7ff]/50' : ''
                             }`}
@@ -891,7 +948,7 @@ export default function CreateASN() {
                               <input
                                 type="checkbox"
                                 checked={isSelected}
-                                onChange={() => toggleSelectOne(item.itemNo)}
+                                onChange={() => toggleSelectOne(item.rowId)}
                                 className="w-4 h-4 rounded accent-[#0a6ed1] cursor-pointer"
                               />
                             </td>
@@ -906,7 +963,7 @@ export default function CreateASN() {
                               {item.schLine || '1'}
                             </td>
 
-                            {/* Material: Code bold on top, Description below */}
+                            {/* Material */}
                             <td className="py-3 px-4">
                               <div className="font-bold text-[#1f2937] leading-tight">{item.materialNumber}</div>
                               <div className="text-[12px] text-[#4b5563] leading-tight mt-0.5">{item.materialName}</div>
@@ -940,23 +997,34 @@ export default function CreateASN() {
                               <span className="text-[#4b5563] text-[12px]">{unit}</span>
                             </td>
 
-                            {/* ASN Created */}
+                            {/* ASN Created (qty already shipped on earlier ASNs) */}
                             <td className="py-3 px-3 text-[#1f2937]">
                               <span className="font-bold">{item.asnCreated}</span>{' '}
                               <span className="text-[#4b5563] text-[12px]">{unit}</span>
                             </td>
 
-                            {/* Avl. ASN Qty (Editable input box followed by unit NO) */}
+                            {/* Avl. ASN Qty: editable, limited to Conf. Qty - ASN Created */}
                             <td className="py-3 px-3">
                               <div className="flex items-center gap-1.5">
                                 <input
                                   type="number"
+                                  min="0"
+                                  max={maxAvl}
                                   value={item.avlAsnQty}
-                                  onChange={(e) => updateItem(item.itemNo, 'avlAsnQty', e.target.value)}
-                                  className="w-16 h-8 px-2 text-center border border-[#d1d5db] rounded bg-white text-[13px] font-semibold text-[#1f2937] outline-none focus:border-[#0a6ed1]"
+                                  onChange={(e) => updateItem(item.rowId, 'avlAsnQty', e.target.value)}
+                                  className={`w-16 h-8 px-2 text-center border rounded text-[13px] font-semibold text-[#1f2937] outline-none ${
+                                    exceeded
+                                      ? 'border-[#dc2626] bg-[#fef2f2] focus:border-[#dc2626]'
+                                      : 'border-[#d1d5db] bg-white focus:border-[#0a6ed1]'
+                                  }`}
                                 />
                                 <span className="text-[#4b5563] font-medium text-[12px]">{unit}</span>
                               </div>
+                              {exceeded && (
+                                <div className="text-[11px] text-[#dc2626] font-medium mt-1">
+                                  Cannot exceed {maxAvl} {unit}
+                                </div>
+                              )}
                             </td>
 
                             {/* Vendor Return Qty */}
@@ -981,7 +1049,7 @@ export default function CreateASN() {
                               <input
                                 type="text"
                                 value={item.supplierNetPrice}
-                                onChange={(e) => updateItem(item.itemNo, 'supplierNetPrice', e.target.value)}
+                                onChange={(e) => updateItem(item.rowId, 'supplierNetPrice', e.target.value)}
                                 className="w-20 h-8 px-2 text-left border border-[#d1d5db] rounded bg-white text-[13px] outline-none focus:border-[#0a6ed1]"
                               />
                             </td>
@@ -990,7 +1058,7 @@ export default function CreateASN() {
                             <td className="py-3 px-3">
                               <TaxMismatchSwitch
                                 value={item.taxMismatch}
-                                onChange={(val) => updateItem(item.itemNo, 'taxMismatch', val)}
+                                onChange={(val) => updateItem(item.rowId, 'taxMismatch', val)}
                               />
                             </td>
 
@@ -998,7 +1066,7 @@ export default function CreateASN() {
                             <td className="py-3 px-4">
                               <select
                                 value={item.packingMaterialType}
-                                onChange={(e) => updateItem(item.itemNo, 'packingMaterialType', e.target.value)}
+                                onChange={(e) => updateItem(item.rowId, 'packingMaterialType', e.target.value)}
                                 className="h-8 px-2 text-[13px] border border-[#d1d5db] rounded bg-white outline-none focus:border-[#0a6ed1]"
                               >
                                 {PACKAGING_TYPES.map((pt) => (
@@ -1015,7 +1083,7 @@ export default function CreateASN() {
                                 <input
                                   type="text"
                                   value={item.packingMaterialQty}
-                                  onChange={(e) => updateItem(item.itemNo, 'packingMaterialQty', e.target.value)}
+                                  onChange={(e) => updateItem(item.rowId, 'packingMaterialQty', e.target.value)}
                                   className="w-12 h-8 px-2 text-center border border-[#d1d5db] rounded bg-white text-[13px] outline-none focus:border-[#0a6ed1]"
                                 />
                                 <button
@@ -1034,11 +1102,11 @@ export default function CreateASN() {
                               {item.spq || '41.000'}
                             </td>
 
-                            {/* PDIR No. (Safe dropdown select) */}
+                            {/* PDIR No. */}
                             <td className="py-3 px-4">
                               <select
                                 value={item.pdirNo}
-                                onChange={(e) => updateItem(item.itemNo, 'pdirNo', e.target.value)}
+                                onChange={(e) => updateItem(item.rowId, 'pdirNo', e.target.value)}
                                 className="h-8 px-2 text-[13px] border border-[#d1d5db] rounded bg-white outline-none focus:border-[#0a6ed1] min-w-[120px]"
                               >
                                 <option value="">Select</option>
@@ -1126,7 +1194,11 @@ export default function CreateASN() {
                 <strong className="text-[#1f2937]">{successModal.count} items</strong>
               </div>
             </div>
-
+            {saveWarning && (
+              <div className="bg-[#fef3c7] border border-[#fcd34d] text-[#92400e] rounded-lg p-3 text-[12px] text-left mb-4">
+                {saveWarning}
+              </div>
+            )}
             <button
               onClick={() => {
                 setSuccessModal(null)

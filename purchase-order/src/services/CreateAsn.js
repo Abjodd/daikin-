@@ -16,6 +16,7 @@ const getHeaders = () => ({
 const num = (v) => Number(String(v ?? '').trim() || 0)
 const str = (v) => String(v ?? '').trim()
 const stripZeros = (v) => str(v).replace(/^0+/, '')
+const lineKey = (item, sch) => `${stripZeros(item)}-${stripZeros(sch) || '1'}`
 
 // Accepts '/Date(ms)/', 'YYYYMMDD' or 'YYYY-MM-DD' and returns 'YYYY-MM-DD' (or '')
 export function sapDateToIso(v) {
@@ -240,13 +241,23 @@ export const createAsnService = {
 
     const poFilter = encodeURIComponent(`PurchaseOrder eq '${poNo}'`)
 
-    // Header and schedule lines are optional; the PO items and the confirmations are required.
-    const [headers, poItems, schs, confirmedMap] = await Promise.all([
+    const asnFilter = encodeURIComponent(`Purchaseorder eq '${poNo}'`)
+
+    const [headers, poItems, schs, confirmedMap, asnItems] = await Promise.all([
       getResults(`${ODATA_BASE}/ZCDS_PURCHASE_HEADER?$filter=${poFilter}&$format=json`).catch(() => []),
       getResults(`${ODATA_BASE}/ZCDS_PURCHASEITEM?$filter=${poFilter}&$format=json`),
       getResults(`${ODATA_BASE}/ZCDS_PURCHASEITEM_SCH?$filter=${poFilter}&$format=json`).catch(() => []),
       fetchConfirmedMap(poNo),
+      // Required: if this fails we must not show full quantities again
+      getResults(`${ODATA_BASE}/ZP_PUR_ASN_ITEM?$filter=${asnFilter}&$format=json`),
     ])
+
+    // Qty already shipped on earlier ASNs, per PO item + schedule line
+    const createdMap = new Map()
+    for (const r of asnItems) {
+      const k = lineKey(r.Poitem, r.Scheduleitem)
+      createdMap.set(k, (createdMap.get(k) || 0) + num(r.Asnavlqty))
+    }
 
     const header = headers[0] ? mapHeader(headers[0]) : mapHeader({ PurchaseOrder: poNo })
 
@@ -268,6 +279,11 @@ export const createAsnService = {
       // Confirmation is status based (no quantity is stored), so a confirmed line counts in full
       const confQty = committed > 0 ? str(sch.ScheduleLineCommittedQuantity) : orderQty
 
+      // Fully covered by earlier ASNs: don't show this line
+      const created = createdMap.get(lineKey(it.PurchaseOrderItem, sch.PurchaseOrderScheduleLine)) || 0
+      const avlQty = Math.max(0, num(confQty) - created)
+      if (avlQty <= 0) continue
+
       rows.push(
         mapItem({
           Poitem: it.PurchaseOrderItem,
@@ -282,9 +298,11 @@ export const createAsnService = {
           Shipmentdate: sch.ScheduleLineDeliveryDate,
           Hsn_Code: it.CommodityCode,
           Meins: it.PurchaseOrderQuantityUnit,
-          Asncreatedqty: '0.00',
+          Asncreatedqty: created.toFixed(3),
+          Asnavlqty: String(Number(avlQty.toFixed(3))),
         })
       )
+      
     }
 
     return { header, items: finalizeItems(rows) }
