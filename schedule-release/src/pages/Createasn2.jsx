@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate, useLocation } from 'react-router-dom'
 import PageLayout from '../layouts/Pagelayout.jsx'
 import { createAsnApi, uploadAllAttachments } from '../services/Createasnsch.js'
@@ -95,6 +96,103 @@ function getAvlAsnQtyError(item) {
   if (created + avl > total) return `exceeds Total Qty (${total}).`
   return null
 }
+// ═══════════════════════════════════════════════════════════════
+// TAX BREAKDOWN POPUP (PORTAL-BASED — FLOATS ABOVE TABLE)
+// ═══════════════════════════════════════════════════════════════
+function TaxBreakdownPopup({ item, rect, onClose }) {
+  const popupRef = useRef(null)
+
+  useEffect(() => {
+    const handleOutside = (e) => {
+      if (popupRef.current && !popupRef.current.contains(e.target)) {
+        onClose()
+      }
+    }
+    const handleScroll = () => onClose()
+    const handleKey = (e) => { if (e.key === 'Escape') onClose() }
+
+    document.addEventListener('mousedown', handleOutside)
+    window.addEventListener('scroll', handleScroll, true)
+    window.addEventListener('resize', handleScroll)
+    window.addEventListener('keydown', handleKey)
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutside)
+      window.removeEventListener('scroll', handleScroll, true)
+      window.removeEventListener('resize', handleScroll)
+      window.removeEventListener('keydown', handleKey)
+    }
+  }, [onClose])
+
+  const qty = parseFloat(item.avlAsnQty || 1)
+  const price = parseFloat(item.supplierNetPrice || item.netPrice || 0)
+  const baseValue = qty * price
+
+  const igstPer = parseFloat(item.igstPer ?? 0)
+  const cgstPer = parseFloat(item.cgstPer ?? 9)
+  const sgstPer = parseFloat(item.sgstPer ?? 9)
+
+  const igstAmt = item.igst && Number(item.igst) > 0 ? Number(item.igst) : (baseValue * igstPer / 100)
+  const cgstAmt = item.cgst && Number(item.cgst) > 0 ? Number(item.cgst) : (baseValue * cgstPer / 100)
+  const sgstAmt = item.sgst && Number(item.sgst) > 0 ? Number(item.sgst) : (baseValue * sgstPer / 100)
+
+  // Calculate viewport position directly above button (or below if near top)
+  const spaceAbove = rect ? rect.top : 200
+  const showBelow = spaceAbove < 130
+  const top = rect ? (showBelow ? rect.bottom + 8 : rect.top - 120) : 200
+  const left = rect ? Math.max(12, Math.min(window.innerWidth - 340, rect.left + rect.width / 2 - 160)) : 200
+
+  return createPortal(
+    <div
+      ref={popupRef}
+      style={{
+        position: 'fixed',
+        top: `${top}px`,
+        left: `${left}px`,
+        zIndex: 999999,
+        minWidth: 320,
+      }}
+      className="bg-white border border-[#cfd8e3] rounded-xl shadow-2xl p-0 overflow-hidden text-[12px] anim-fade"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="bg-[#f8fafc] border-b border-[#e2e8f0] px-3 py-2 flex items-center justify-between">
+        <span className="font-bold text-[#0f172a] text-[11px] uppercase tracking-wider">Tax Breakdown</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-[#94a3b8] hover:text-[#0f172a] text-[16px] font-bold leading-none cursor-pointer p-0.5"
+          title="Close"
+        >
+          &times;
+        </button>
+      </div>
+      <table className="w-full text-center border-collapse">
+        <thead>
+          <tr className="bg-[#f1f5f9] text-[#475569] text-[11px] font-bold border-b border-[#e2e8f0]">
+            <th className="py-2 px-2.5">HSN/SAC</th>
+            <th className="py-2 px-2.5">IGST</th>
+            <th className="py-2 px-2.5">CGST</th>
+            <th className="py-2 px-2.5">SGST / UGST</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr className="border-b border-[#f1f5f9] font-medium text-[#1e293b]">
+            <td className="py-2.5 px-2.5 font-bold text-[#0a6ed1]">{item.hsnCode || item.hsn || '84159000'}</td>
+            <td className="py-2.5 px-2.5">{igstAmt.toFixed(2)} ({igstPer}%)</td>
+            <td className="py-2.5 px-2.5">{cgstAmt.toFixed(2)} ({cgstPer}%)</td>
+            <td className="py-2.5 px-2.5">{sgstAmt.toFixed(2)} ({sgstPer}%)</td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="px-3 py-2 bg-[#f8fafc] flex justify-between items-center text-[11px] text-[#475569]">
+        <span>Total Tax: <strong className="text-[#0f172a]">₹{(igstAmt + cgstAmt + sgstAmt).toFixed(2)}</strong></span>
+        <span>Item Total: <strong className="text-[#0a6ed1]">₹{(baseValue + igstAmt + cgstAmt + sgstAmt).toFixed(2)}</strong></span>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ═══════════════════════════════════════════════════════════════
 // TAX MISMATCH TOGGLE
 // ═══════════════════════════════════════════════════════════════
@@ -312,7 +410,7 @@ function ConfirmationModal({ open, kind, title, message, details, primaryLabel, 
 // ═══════════════════════════════════════════════════════════════
 // MOBILE ITEM CARD
 // ═══════════════════════════════════════════════════════════════
-function MobileItemCard({ item, isSelected, onToggle, onUpdate, onSplitBatch, packagingTypes, pdirOptions, originalQty }) {
+function MobileItemCard({ item, isSelected, onToggle, onUpdate, onSplitBatch, onTaxPopup, packagingTypes, pdirOptions, originalQty }) {
   const [expanded, setExpanded] = useState(false)
   const isZeroQty = originalQty === 0
   const batchCount = item.batches?.length || 0
@@ -375,6 +473,7 @@ function MobileItemCard({ item, isSelected, onToggle, onUpdate, onSplitBatch, pa
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">
             {[
               { label: 'Sch Line', value: `${item.ebelp} / ${item.schLine}` },
+              { label: 'Net Price', value: `${item.netPrice} INR`, isPrice: true },
               { label: 'Total Qty', value: `${item.totalQty} ${item.totalUnit}` },
               { label: 'Confirm Qty', value: `${item.confQty} ${item.confUnit}` },
               { label: 'Delivered Qty', value: `${item.deliveredQty} ${item.deliveredUnit}` },
@@ -383,7 +482,21 @@ function MobileItemCard({ item, isSelected, onToggle, onUpdate, onSplitBatch, pa
             ].map((d, i) => (
               <div key={i} className="bg-white rounded-lg px-3 py-2 border border-[#e5e5e5] min-w-0">
                 <div className="text-[10px] text-[#9ca3af] font-semibold uppercase tracking-wide">{d.label}</div>
-                <div className="text-[13px] text-[#32363a] font-semibold mt-0.5 truncate">{d.value}</div>
+                {d.isPrice ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      const r = e.currentTarget.getBoundingClientRect()
+                      onTaxPopup && onTaxPopup({ item, rect: r })
+                    }}
+                    className="text-[13px] text-[#0a6ed1] font-bold mt-0.5 truncate hover:underline text-left cursor-pointer"
+                    title="Click to view tax breakdown"
+                  >
+                    {d.value}
+                  </button>
+                ) : (
+                  <div className="text-[13px] text-[#32363a] font-semibold mt-0.5 truncate">{d.value}</div>
+                )}
               </div>
             ))}
           </div>
@@ -465,7 +578,7 @@ function MobileItemCard({ item, isSelected, onToggle, onUpdate, onSplitBatch, pa
 // DESKTOP ITEM CARD
 // Grids step up with the viewport: 2 cols → 4 → 8 (row 1), 2 → 3 → 5 (row 2)
 // ═══════════════════════════════════════════════════════════════
-function DesktopItemCard({ item, isSelected, onToggle, onUpdate, onSplitBatch, packagingTypes, pdirOptions, originalQty }) {
+function DesktopItemCard({ item, isSelected, onToggle, onUpdate, onSplitBatch, onTaxPopup, packagingTypes, pdirOptions, originalQty }) {
   const isZeroQty = originalQty === 0
   const bc = item.batches?.length || 0
   const bsum = (item.batches || []).reduce((s, b) => s + parseFloat(b.quantity || 0), 0)
@@ -523,7 +636,19 @@ function DesktopItemCard({ item, isSelected, onToggle, onUpdate, onSplitBatch, p
               <span className="text-[10px] text-[#cc1c14] font-semibold leading-tight">Must be &gt;= {item.avlAsnQty}</span>
             )}
           </Field>
-          <Field label="Net Price"><ReadonlyVal value={item.netPrice} /></Field>
+          <Field label="Net Price">
+            <button
+              type="button"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect()
+                onTaxPopup && onTaxPopup({ item, rect: r })
+              }}
+              className="text-[#0a6ed1] font-bold text-left hover:underline cursor-pointer"
+              title="Click to view tax breakdown"
+            >
+              {item.netPrice} INR
+            </button>
+          </Field>
           <Field label="Supplier Net Price">
             <input type="text" value={item.supplierNetPrice} onChange={e => onUpdate('supplierNetPrice', e.target.value)} disabled={isZeroQty} className={inputCls + ' disabled:bg-[#f5f5f5] disabled:cursor-not-allowed'} />
           </Field>
@@ -671,7 +796,9 @@ export default function CreateASN2({ agreement: propAgreement }) {
 
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [invoiceDate, setInvoiceDate] = useState('')
+  const [invoiceAmount, setInvoiceAmount] = useState('')
   const [totalPacking, setTotalPacking] = useState('')
+  const [taxPopup, setTaxPopup] = useState(null)
 
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
@@ -765,8 +892,34 @@ export default function CreateASN2({ agreement: propAgreement }) {
 
   const calcInvoiceValue = () =>
     items.filter(i => selectedItemNos.includes(i.itemNo))
-      .reduce((sum, i) => sum + (parseFloat(i.avlAsnQty || 0) * parseFloat(i.supplierNetPrice || 0)), 0)
+      .reduce((sum, i) => sum + (parseFloat(i.avlAsnQty || 0) * parseFloat(i.supplierNetPrice || i.netPrice || 0)), 0)
       .toFixed(2)
+
+  const invoiceValueVendor = useMemo(() => {
+    return calcInvoiceValue()
+  }, [items, selectedItemNos])
+
+  // Auto-populate invoice amount based on selected items + tax formula
+  useEffect(() => {
+    const selectedItems = items.filter(i => selectedItemNos.includes(i.itemNo))
+    if (selectedItems.length > 0) {
+      const totalWithTax = selectedItems.reduce((acc, it) => {
+        const q = parseFloat(it.avlAsnQty || 0)
+        const p = parseFloat(it.supplierNetPrice || it.netPrice || 0)
+        const base = q * p
+        const igstPer = parseFloat(it.igstPer ?? 0)
+        const cgstPer = parseFloat(it.cgstPer ?? 9)
+        const sgstPer = parseFloat(it.sgstPer ?? 9)
+        const igst = it.igst && Number(it.igst) > 0 ? Number(it.igst) : (base * igstPer / 100)
+        const cgst = it.cgst && Number(it.cgst) > 0 ? Number(it.cgst) : (base * cgstPer / 100)
+        const sgst = it.sgst && Number(it.sgst) > 0 ? Number(it.sgst) : (base * sgstPer / 100)
+        return acc + base + igst + cgst + sgst
+      }, 0)
+      setInvoiceAmount(totalWithTax.toFixed(2))
+    } else {
+      setInvoiceAmount('')
+    }
+  }, [items, selectedItemNos])
 
   const validateBeforeCreate = () => {
     const errors = []
@@ -813,7 +966,8 @@ export default function CreateASN2({ agreement: propAgreement }) {
         <div className="space-y-1.5">
           <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">Agreement</span><strong>{agreement.id}</strong></div>
           <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">Invoice Number</span><strong className="break-all text-right">{invoiceNumber}</strong></div>
-          <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">Invoice Amount</span><strong>₹ {calcInvoiceValue()}</strong></div>
+          <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">Invoice Amount</span><strong>₹ {invoiceAmount || invoiceValueVendor}</strong></div>
+          <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">Invoice Value (Vendor)</span><strong>₹ {invoiceValueVendor}</strong></div>
           <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">Items selected</span><strong>{selectedItems.length}</strong></div>
           <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">PDIR attachments</span><strong>{pdirAttachments.length}</strong></div>
           <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">General attachments</span><strong>{generalAttachments.length}</strong></div>
@@ -829,8 +983,9 @@ export default function CreateASN2({ agreement: propAgreement }) {
     try {
       const selectedItems = items.filter(i => selectedItemNos.includes(i.itemNo))
       const result = await createAsnApi.submitAsn({
+        header: agreement,
         scheduleNo: agreement.id, plant: agreement.plant,
-        invoiceNumber, invoiceDate, invoiceAmount: calcInvoiceValue(), totalPacking,
+        invoiceNumber, invoiceDate, invoiceAmount: invoiceAmount || invoiceValueVendor, totalPacking,
         items: selectedItems,
       })
 
@@ -888,15 +1043,35 @@ export default function CreateASN2({ agreement: propAgreement }) {
 
   const totalAttachments = generalAttachments.length + pdirAttachments.length
 
+  const toIsoDate = (d) => {
+    if (!d) return null
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d
+    const dt = new Date(d)
+    return isNaN(dt.getTime()) ? null : dt.toISOString().slice(0, 10)
+  }
+
   const filteredItems = useMemo(() => {
     const available = items.filter(i => (originalQties[i.itemNo] ?? parseFloat(i.avlAsnQty || 0)) > 0)
-    if (!materialSearch.trim()) return available
+    const fromIso = toIsoDate(fromDate)
+    const toIso = toIsoDate(toDate)
     const q = materialSearch.trim().toUpperCase()
-    return available.filter(i => i.materialNumber.toUpperCase().includes(q) || i.materialName.toUpperCase().includes(q))
-  }, [items, materialSearch, originalQties])
+
+    return available.filter(i => {
+      const matchMat = !q || i.materialNumber?.toUpperCase().includes(q) || i.materialName?.toUpperCase().includes(q)
+      const itemDateIso = toIsoDate(i.shipmentDate || i.deliveryDate)
+      const matchFrom = !fromIso || !itemDateIso || itemDateIso >= fromIso
+      const matchTo = !toIso || !itemDateIso || itemDateIso <= toIso
+      return matchMat && matchFrom && matchTo
+    })
+  }, [items, materialSearch, fromDate, toDate, originalQties])
 
   return (
-    <PageLayout>
+    <PageLayout
+      companyCode={agreement?.companyCode || agreement?.companyName}
+      supplierName={agreement?.vendorName || agreement?.vendor}
+      supplierLocation={agreement?.plantName || agreement?.plant}
+      onBack={() => navigate(-1)}
+    >
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
@@ -968,12 +1143,18 @@ export default function CreateASN2({ agreement: propAgreement }) {
                     <input type="date" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value)} className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-3 text-[14px] outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all" />
                   </div>
                   <div>
-                    <label className="block text-[13px] font-semibold text-[#374151] mb-1.5">Invoice Amount (auto)</label>
-                    <div className="h-10 rounded-lg border border-dashed border-[#cfd8e3] bg-[#f8fafc] flex items-center px-3 text-[#32363a] text-[13px] font-semibold">₹ {calcInvoiceValue()}</div>
+                    <label className="block text-[13px] font-semibold text-[#374151] mb-1.5">Invoice Amount <span className="text-[#dc2626] font-bold">*</span></label>
+                    <input
+                      type="text"
+                      value={invoiceAmount}
+                      onChange={e => setInvoiceAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-3 text-[14px] outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all font-semibold"
+                    />
                   </div>
                   <div>
                     <label className="block text-[13px] font-semibold text-[#374151] mb-1.5">Invoice Value (Vendor)</label>
-                    <div className="h-10 rounded-lg border border-dashed border-[#cfd8e3] bg-[#f8fafc] flex items-center px-3 text-[#6a6d70] text-[13px] italic">₹ {calcInvoiceValue()}</div>
+                    <div className="h-10 rounded-lg border border-dashed border-[#cfd8e3] bg-[#f8fafc] flex items-center px-3 text-[#1f2937] text-[13px] font-semibold select-none">₹ {invoiceValueVendor}</div>
                   </div>
                   <div>
                     <label className="block text-[13px] font-semibold text-[#374151] mb-1.5">Total Packing</label>
@@ -1018,7 +1199,19 @@ export default function CreateASN2({ agreement: propAgreement }) {
                           <tr key={item.itemNo} className="border-b border-[#f0f0f0] last:border-b-0 hover:bg-[#fafbfc]">
                             <td className="py-3 px-4 font-semibold text-[#0a6ed1] whitespace-nowrap">{item.ebelp} / {item.schLine}</td>
                             <td className="py-3 px-4"><div className="text-[#0a6ed1] font-semibold">{item.materialNumber}</div><div className="text-[#6a6d70] text-[12px]">{item.materialName}</div></td>
-                            <td className="py-3 px-4 text-[#32363a]">{item.netPrice}</td>
+                            <td className="py-3 px-4 text-[#32363a]">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  const r = e.currentTarget.getBoundingClientRect()
+                                  setTaxPopup(taxPopup?.item?.itemNo === item.itemNo ? null : { item, rect: r })
+                                }}
+                                className="text-[#0a6ed1] font-semibold hover:underline cursor-pointer"
+                                title="Click to view tax breakdown"
+                              >
+                                {item.netPrice} INR
+                              </button>
+                            </td>
                             <td className="py-3 px-4 text-[#32363a] whitespace-nowrap">{item.avlAsnQty} {item.totalUnit}</td>
                             <td className="py-3 px-4 text-[#32363a]">{item.spq}</td>
                             <td className="py-3 px-4">
@@ -1028,7 +1221,7 @@ export default function CreateASN2({ agreement: propAgreement }) {
                                 </span>
                               )}
                             </td>
-                            <td className="py-3 px-4 text-[#32363a] font-semibold">{(parseFloat(item.avlAsnQty || 0) * parseFloat(item.supplierNetPrice || 0)).toFixed(2)}</td>
+                            <td className="py-3 px-4 text-[#32363a] font-semibold">{(parseFloat(item.avlAsnQty || 0) * parseFloat(item.supplierNetPrice || item.netPrice || 0)).toFixed(2)}</td>
                           </tr>
                         )
                       })}
@@ -1127,7 +1320,7 @@ export default function CreateASN2({ agreement: propAgreement }) {
                     </div>
                     {filteredItems.length === 0 && <div className="py-12 text-center text-[#6a6d70] text-[14px]">No items available</div>}
                     {filteredItems.map(item => (
-                      <MobileItemCard key={item.itemNo} item={item} isSelected={selectedItemNos.includes(item.itemNo)} onToggle={() => toggleOne(item.itemNo)} onUpdate={(field, val) => updateItem(item.itemNo, field, val)} onSplitBatch={(it) => setSplitBatchItem(it)} packagingTypes={packagingTypes} pdirOptions={pdirOptions} originalQty={originalQties[item.itemNo] ?? parseFloat(item.avlAsnQty || 0)} />
+                      <MobileItemCard key={item.itemNo} item={item} isSelected={selectedItemNos.includes(item.itemNo)} onToggle={() => toggleOne(item.itemNo)} onUpdate={(field, val) => updateItem(item.itemNo, field, val)} onSplitBatch={(it) => setSplitBatchItem(it)} onTaxPopup={setTaxPopup} packagingTypes={packagingTypes} pdirOptions={pdirOptions} originalQty={originalQties[item.itemNo] ?? parseFloat(item.avlAsnQty || 0)} />
                     ))}
                   </div>
                 ) : !itemsLoading && (
@@ -1144,7 +1337,7 @@ export default function CreateASN2({ agreement: propAgreement }) {
                     </div>
                     {filteredItems.length === 0 && <div className="py-16 text-center text-[#6a6d70] text-[14px] border border-dashed border-[#d9d9d9] rounded-xl">No items available. Adjust filters and click Go.</div>}
                     {filteredItems.map(item => (
-                      <DesktopItemCard key={item.itemNo} item={item} isSelected={selectedItemNos.includes(item.itemNo)} onToggle={() => toggleOne(item.itemNo)} onUpdate={(field, val) => updateItem(item.itemNo, field, val)} onSplitBatch={(it) => setSplitBatchItem(it)} packagingTypes={packagingTypes} pdirOptions={pdirOptions} originalQty={originalQties[item.itemNo] ?? parseFloat(item.avlAsnQty || 0)} />
+                      <DesktopItemCard key={item.itemNo} item={item} isSelected={selectedItemNos.includes(item.itemNo)} onToggle={() => toggleOne(item.itemNo)} onUpdate={(field, val) => updateItem(item.itemNo, field, val)} onSplitBatch={(it) => setSplitBatchItem(it)} onTaxPopup={setTaxPopup} packagingTypes={packagingTypes} pdirOptions={pdirOptions} originalQty={originalQties[item.itemNo] ?? parseFloat(item.avlAsnQty || 0)} />
                     ))}
                   </div>
                 )}
@@ -1180,6 +1373,13 @@ export default function CreateASN2({ agreement: propAgreement }) {
 
       <SplitBatchModal open={!!splitBatchItem} item={splitBatchItem} onClose={() => setSplitBatchItem(null)} onSave={handleSplitBatchSave} />
       <ConfirmationModal open={!!modal} kind={modal?.kind} title={modal?.title} message={modal?.message} details={modal?.details} primaryLabel={modal?.primaryLabel} secondaryLabel={modal?.secondaryLabel} onPrimary={modal?.onPrimary} onSecondary={modal?.onSecondary} />
+      {taxPopup && (
+        <TaxBreakdownPopup
+          item={taxPopup.item}
+          rect={taxPopup.rect}
+          onClose={() => setTaxPopup(null)}
+        />
+      )}
     </PageLayout>
   )
 }

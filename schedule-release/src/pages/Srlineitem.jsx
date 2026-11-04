@@ -9,7 +9,7 @@ const DAY_ABBR    = ['SUN','MON','TUE','WED','THU','FRI','SAT']
 
 // ── Status config ──────────────────────────────────────────────
 const STATUS_CONFIG = {
-  'Confirmation Required': { bg: '#fff3e0', text: '#e65100', dot: '#ff9800', label: 'Confirmation Required' },
+  'Confirmation Required': { bg: '#fef2f2', text: '#dc2626', dot: '#ef4444', label: 'Confirmation Required' },
   'Partially Confirmed':   { bg: '#e3f2fd', text: '#1565c0', dot: '#1976d2', label: 'Partially Confirmed'   },
   'Confirmed':             { bg: '#e8f5e9', text: '#2e7d32', dot: '#43a047', label: 'Confirmed'             },
   'Completed':             { bg: '#f3e5f5', text: '#6a1b9a', dot: '#8e24aa', label: 'Completed'             },
@@ -347,10 +347,25 @@ export default function SRlineitem() {
   const calCols     = useMemo(() => buildCalendarCols(scheduleLines), [scheduleLines])
   const monthGroups = useMemo(() => groupByMonth(calCols), [calCols])
 
+  const currentCompany = agreement?.companyCode
+    ? `${agreement.companyCode}${agreement.companyCodeName ? ` (${agreement.companyCodeName})` : ''}`
+    : '1810'
+
+  const currentSupplier = agreement?.vendorName
+    ? `${agreement.vendorName}${agreement.vendorNo && !agreement.vendorName.includes(agreement.vendorNo) ? ` (${agreement.vendorNo})` : ''}`
+    : (agreement?.vendor || agreement?.vendorNo || '')
+
+  const currentLocation = agreement?.vendorAddress || (agreement?.plantName ? `${agreement.plantName}${agreement.plant ? ` (${agreement.plant})` : ''}` : (agreement?.plant || ''))
+
   // ── Fallback (e.g. page opened directly / refreshed — router state is lost) ──
   if (!drilledItem || !agreement) {
     return (
-      <PageLayout>
+      <PageLayout
+        companyCode={currentCompany}
+        supplierName={currentSupplier}
+        supplierLocation={currentLocation}
+        onBack={() => navigate(-1)}
+      >
         <div className="flex flex-col items-center justify-center h-64 px-4 text-center text-[#6a6d70]">
           <span className="text-[14px]">No item data. Please go back and select an item.</span>
           <button
@@ -365,7 +380,12 @@ export default function SRlineitem() {
   }
 
   return (
-    <PageLayout>
+    <PageLayout
+      companyCode={currentCompany}
+      supplierName={currentSupplier}
+      supplierLocation={currentLocation}
+      onBack={() => navigate(-1)}
+    >
       <style>{`
         @keyframes fadeIn       { from { opacity: 0; transform: translateY(8px);  } to { opacity: 1; transform: translateY(0);  } }
         @keyframes slideInRight { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0);  } }

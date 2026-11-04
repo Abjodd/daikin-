@@ -414,7 +414,17 @@ function SidebarContent({
             </div>
           )}
           <div className="relative">
-            <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  const firstMatch = filteredAgreements[0]
+                  if (firstMatch) handleSelectAgreement(firstMatch.id || firstMatch.poNo)
+                }
+              }}
               placeholder="Search by ID or plant"
               className="w-full h-10 pl-3.5 pr-16 text-[14px] border border-[#d9d9d9] rounded-lg bg-white focus:outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all"
             />
@@ -424,7 +434,14 @@ function SidebarContent({
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
                 </button>
               )}
-              <button className="w-7 h-7 flex items-center justify-center text-[#6a6d70] hover:text-[#0a6ed1] rounded transition-all">
+              <button
+                type="button"
+                onClick={() => {
+                  const firstMatch = filteredAgreements[0]
+                  if (firstMatch) handleSelectAgreement(firstMatch.id || firstMatch.poNo)
+                }}
+                className="w-7 h-7 flex items-center justify-center text-[#6a6d70] hover:text-[#0a6ed1] rounded transition-all cursor-pointer"
+              >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
                 </svg>

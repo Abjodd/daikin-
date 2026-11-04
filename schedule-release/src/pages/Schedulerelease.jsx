@@ -37,9 +37,34 @@ const toIsoLocal = (d) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+// ── date helpers ──
+export const toStandardIso = (s) => {
+  if (!s) return ''
+  const str = String(s).trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str
+
+  // Handle DD.MM.YYYY
+  if (str.includes('.')) {
+    const parts = str.split('.')
+    if (parts.length === 3 && parts[2].length === 4) {
+      return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`
+    }
+  }
+
+  // Handle Month Name e.g. "Oct 26, 2026"
+  const dt = new Date(str + ' 12:00:00')
+  if (!isNaN(dt)) {
+    const y = dt.getFullYear()
+    const m = String(dt.getMonth() + 1).padStart(2, '0')
+    const d = String(dt.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
+  return ''
+}
+
 // ── status config ──
 const STATUS_CONFIG = {
-  'Confirmation Required': { bg: '#fff3e0', text: '#e65100', dot: '#ff9800', label: 'Confirmation Required' },
+  'Confirmation Required': { bg: '#fef2f2', text: '#dc2626', dot: '#ef4444', label: 'Confirmation Required' },
   'Partially Confirmed':   { bg: '#e3f2fd', text: '#1565c0', dot: '#1976d2', label: 'Partially Confirmed'   },
   'Confirmed':             { bg: '#e8f5e9', text: '#2e7d32', dot: '#43a047', label: 'Confirmed'             },
   'Completed':             { bg: '#f3e5f5', text: '#6a1b9a', dot: '#8e24aa', label: 'Completed'             },
@@ -709,16 +734,58 @@ export default function ScheduleRelease() {
     return () => document.removeEventListener('mousedown', handler)
   }, [mobileSidebarOpen])
 
+  const filteredAgreements = useMemo(() => {
+    return agreements.filter(a => {
+      if (selectedPlants.length > 0 && !selectedPlants.includes(a.plant)) return false
+      if (!searchQuery.trim()) return true
+      const q = searchQuery.toLowerCase().trim()
+      return (
+        (a.id || '').toLowerCase().includes(q) ||
+        (a.plant && a.plant.toLowerCase().includes(q)) ||
+        (a.plantName && a.plantName.toLowerCase().includes(q)) ||
+        (a.vendor && a.vendor.toLowerCase().includes(q)) ||
+        (a.vendorName && a.vendorName.toLowerCase().includes(q)) ||
+        (a.vendorNo && a.vendorNo.toLowerCase().includes(q))
+      )
+    })
+  }, [agreements, searchQuery, selectedPlants])
+
   const dateError = useMemo(() => {
     if (!fromDate || !toDate) return null
-    const f = parseDdmmyyyy(fromDate), t = parseDdmmyyyy(toDate)
-    if (!f || !t) return null
-    return f > t ? 'From Date must be earlier than To Date' : null
+    const fIso = toStandardIso(fromDate)
+    const tIso = toStandardIso(toDate)
+    if (!fIso || !tIso) return null
+    return fIso > tIso ? 'From Date must be earlier than To Date' : null
   }, [fromDate, toDate])
 
-  // NOTE: the delivery date filter is display-only for now (items carry no dates;
-  // the real backend filters server-side), so the item list is not narrowed here.
-  const filteredItems = agreement ? agreement.items : []
+  const filteredItems = useMemo(() => {
+    if (!agreement?.items) return []
+    const fromIso = toStandardIso(fromDate)
+    const toIso = toStandardIso(toDate)
+
+    if (!fromIso && !toIso) return agreement.items
+
+    return agreement.items.filter(item => {
+      const lines = item.scheduleLines || []
+      if (lines.length === 0) {
+        const itemIso = item.deliveryDateIso || toStandardIso(item.deliveryDate)
+        if (!itemIso) return true
+        if (fromIso && itemIso < fromIso) return false
+        if (toIso && itemIso > toIso) return false
+        return true
+      }
+
+      return lines.some(line => {
+        const lineIso = line.deliveryDateRaw
+          ? toStandardIso(line.deliveryDateRaw)
+          : toStandardIso(line.deliveryDate)
+        if (!lineIso) return true
+        if (fromIso && lineIso < fromIso) return false
+        if (toIso && lineIso > toIso) return false
+        return true
+      })
+    })
+  }, [agreement, fromDate, toDate])
 
   const handleSelectAgreement = (id) => {
     setSelectedAgreementId(id)
@@ -775,7 +842,7 @@ export default function ScheduleRelease() {
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-[15px] font-semibold text-[#32363a]">Schedule Agreements</h3>
             <span className="text-[12px] text-[#6a6d70] bg-[#f5f6f7] px-2.5 py-1 rounded-full font-medium">
-              {agreements.length}
+              {filteredAgreements.length} of {agreements.length}
             </span>
           </div>
         )}
@@ -805,7 +872,16 @@ export default function ScheduleRelease() {
             )}
             <div className="relative">
               <input
-                type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    const firstMatch = filteredAgreements[0]
+                    if (firstMatch) handleSelectAgreement(firstMatch.id)
+                  }
+                }}
                 placeholder="Search by ID or plant"
                 className="w-full h-10 pl-3.5 pr-16 text-[14px] border border-[#d9d9d9] rounded-lg bg-white focus:outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all"
               />
@@ -820,7 +896,14 @@ export default function ScheduleRelease() {
                     </svg>
                   </button>
                 )}
-                <button className="w-7 h-7 flex items-center justify-center text-[#6a6d70] hover:text-[#0a6ed1] rounded transition-all">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const firstMatch = filteredAgreements[0]
+                    if (firstMatch) handleSelectAgreement(firstMatch.id)
+                  }}
+                  className="w-7 h-7 flex items-center justify-center text-[#6a6d70] hover:text-[#0a6ed1] rounded transition-all cursor-pointer"
+                >
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                     <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
                   </svg>
@@ -838,7 +921,7 @@ export default function ScheduleRelease() {
         {loading && agreements.length === 0 ? (
           <div className="px-4 py-12 text-center text-[13px] text-[#6a6d70]">Loading…</div>
         ) : collapsed ? (
-          agreements.map(a => {
+          filteredAgreements.map(a => {
             const isSelected = a.id === selectedAgreementId
             return (
               <button
@@ -853,7 +936,7 @@ export default function ScheduleRelease() {
           })
         ) : (
           <>
-            {agreements.map(a => {
+            {filteredAgreements.map(a => {
               const isSelected = a.id === selectedAgreementId
               return (
                 <button
@@ -864,14 +947,21 @@ export default function ScheduleRelease() {
                     <span className="text-[14px] font-bold text-[#0a6ed1]">{a.id}</span>
                     <span className="text-[11px] text-[#6a6d70] bg-[#f0f0f0] px-2 py-0.5 rounded font-medium">{a.type}</span>
                   </div>
-                  <div className="flex items-center justify-between gap-2 text-[12px] text-[#6a6d70]">
-                    <span className="truncate">{a.plant} · {a.plantName}</span>
+                  <div className="flex items-center justify-between gap-2 text-[12px] text-[#6a6d70] mb-0.5">
+                    <span className="truncate font-medium text-[#4b5563]">
+                      {a.plantName ? `${a.plantName} (${a.plant})` : (a.plant ? `Plant (${a.plant})` : 'Plant')}
+                    </span>
                     <span className="whitespace-nowrap">{a.date}</span>
                   </div>
+                  {a.vendor && (
+                    <div className="text-[11px] text-[#9ca3af] truncate">
+                      {a.vendorName ? `${a.vendorName} (${a.vendor})` : a.vendor}
+                    </div>
+                  )}
                 </button>
               )
             })}
-            {agreements.length === 0 && !loading && (
+            {filteredAgreements.length === 0 && !loading && (
               <div className="px-4 py-12 text-center text-[13px] text-[#6a6d70] anim-fade">
                 <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-2 opacity-40">
                   <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
@@ -943,8 +1033,22 @@ export default function ScheduleRelease() {
     </>
   )
 
+  const currentCompany = agreement
+    ? `${agreement.companyCode || '1810'}${agreement.companyCodeName ? ` (${agreement.companyCodeName})` : ''}`
+    : '1810'
+
+  const currentSupplier = agreement
+    ? (agreement.vendor ? `${agreement.vendor}${agreement.vendorNo && !agreement.vendor.includes(agreement.vendorNo) ? ` (${agreement.vendorNo})` : ''}` : agreement.vendorNo)
+    : activeSupplier || ''
+
+  const currentLocation = agreement?.vendorAddress || (agreement?.plantName ? `${agreement.plantName}${agreement.plant ? ` (${agreement.plant})` : ''}` : (agreement?.plant || ''))
+
   return (
-    <PageLayout>
+    <PageLayout
+      companyCode={currentCompany}
+      supplierName={currentSupplier}
+      supplierLocation={currentLocation}
+    >
       <style>{`
         @keyframes fadeIn      { from { opacity: 0; transform: translateY(8px);   } to { opacity: 1; transform: translateY(0);    } }
         @keyframes slideInLeft { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: translateX(0);    } }
@@ -1088,16 +1192,18 @@ export default function ScheduleRelease() {
                       <div className="sm:w-[170px]">
                         <label className="block text-[12px] text-[#6a6d70] mb-1.5 font-semibold">Delivery From Date</label>
                         <input
-                          type="date" value={ddmmyyyyToIso(fromDate)}
-                          onChange={e => setFromDate(isoToDdmmyyyy(e.target.value))}
+                          type="date"
+                          value={toStandardIso(fromDate)}
+                          onChange={e => setFromDate(e.target.value)}
                           className={`w-full h-9 pl-3 pr-2 text-[13px] border rounded-lg bg-white focus:outline-none focus:ring-2 transition-all ${dateError ? 'border-[#cc1c14] focus:ring-[#cc1c14]/20' : 'border-[#d9d9d9] focus:border-[#0a6ed1] focus:ring-[#0a6ed1]/20'}`}
                         />
                       </div>
                       <div className="sm:w-[170px]">
                         <label className="block text-[12px] text-[#6a6d70] mb-1.5 font-semibold">To Date</label>
                         <input
-                          type="date" value={ddmmyyyyToIso(toDate)}
-                          onChange={e => setToDate(isoToDdmmyyyy(e.target.value))}
+                          type="date"
+                          value={toStandardIso(toDate)}
+                          onChange={e => setToDate(e.target.value)}
                           className={`w-full h-9 pl-3 pr-2 text-[13px] border rounded-lg bg-white focus:outline-none focus:ring-2 transition-all ${dateError ? 'border-[#cc1c14] focus:ring-[#cc1c14]/20' : 'border-[#d9d9d9] focus:border-[#0a6ed1] focus:ring-[#0a6ed1]/20'}`}
                         />
                       </div>

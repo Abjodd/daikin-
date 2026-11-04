@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate, useLocation } from 'react-router-dom'
 import PageLayout from '../layouts/PageLayout.jsx'
 import { createAsnService } from '../services/CreateAsn.js'
@@ -68,6 +69,101 @@ function TaxMismatchSwitch({ value, onChange }) {
         {value ? 'YES' : 'NO'}
       </span>
     </button>
+  )
+}
+
+// ─── TAX BREAKDOWN POPUP (PORTAL-BASED — FLOATS ABOVE TABLE) ───────
+function TaxBreakdownPopup({ item, rect, onClose }) {
+  const popupRef = useRef(null)
+
+  useEffect(() => {
+    const handleOutside = (e) => {
+      if (popupRef.current && !popupRef.current.contains(e.target)) {
+        onClose()
+      }
+    }
+    const handleScroll = () => onClose()
+    const handleKey = (e) => { if (e.key === 'Escape') onClose() }
+
+    document.addEventListener('mousedown', handleOutside)
+    window.addEventListener('scroll', handleScroll, true)
+    window.addEventListener('resize', handleScroll)
+    window.addEventListener('keydown', handleKey)
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutside)
+      window.removeEventListener('scroll', handleScroll, true)
+      window.removeEventListener('resize', handleScroll)
+      window.removeEventListener('keydown', handleKey)
+    }
+  }, [onClose])
+
+  const qty = parseFloat(item.avlAsnQty || 1)
+  const price = parseFloat(item.supplierNetPrice || item.netPrice || 0)
+  const baseValue = qty * price
+
+  const igstPer = parseFloat(item.igstPer ?? 0)
+  const cgstPer = parseFloat(item.cgstPer ?? 9)
+  const sgstPer = parseFloat(item.sgstPer ?? 9)
+
+  const igstAmt = item.igst && Number(item.igst) > 0 ? Number(item.igst) : (baseValue * igstPer / 100)
+  const cgstAmt = item.cgst && Number(item.cgst) > 0 ? Number(item.cgst) : (baseValue * cgstPer / 100)
+  const sgstAmt = item.sgst && Number(item.sgst) > 0 ? Number(item.sgst) : (baseValue * sgstPer / 100)
+
+  // Calculate viewport position directly above button (or below if near top)
+  const spaceAbove = rect ? rect.top : 200
+  const showBelow = spaceAbove < 130
+  const top = rect ? (showBelow ? rect.bottom + 6 : rect.top - 110) : 200
+  const left = rect ? Math.max(12, Math.min(window.innerWidth - 340, rect.left + rect.width / 2 - 160)) : 200
+
+  return createPortal(
+    <div
+      ref={popupRef}
+      style={{
+        position: 'fixed',
+        top: `${top}px`,
+        left: `${left}px`,
+        zIndex: 999999,
+        minWidth: 320,
+      }}
+      className="bg-white border border-[#cfd8e3] rounded-xl shadow-2xl p-0 overflow-hidden text-[12px] anim-fade"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="bg-[#f8fafc] border-b border-[#e2e8f0] px-3 py-2 flex items-center justify-between">
+        <span className="font-bold text-[#0f172a] text-[11px] uppercase tracking-wider">Tax Breakdown</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-[#94a3b8] hover:text-[#0f172a] text-[16px] font-bold leading-none cursor-pointer p-0.5"
+          title="Close"
+        >
+          &times;
+        </button>
+      </div>
+      <table className="w-full text-center border-collapse">
+        <thead>
+          <tr className="bg-[#f1f5f9] text-[#475569] text-[11px] font-bold border-b border-[#e2e8f0]">
+            <th className="py-2 px-2.5">HSN/SAC</th>
+            <th className="py-2 px-2.5">IGST</th>
+            <th className="py-2 px-2.5">CGST</th>
+            <th className="py-2 px-2.5">SGST / UGST</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr className="border-b border-[#f1f5f9] font-medium text-[#1e293b]">
+            <td className="py-2.5 px-2.5 font-bold text-[#0a6ed1]">{item.hsnCode || item.hsn || '84159000'}</td>
+            <td className="py-2.5 px-2.5">{igstAmt.toFixed(2)} ({igstPer}%)</td>
+            <td className="py-2.5 px-2.5">{cgstAmt.toFixed(2)} ({cgstPer}%)</td>
+            <td className="py-2.5 px-2.5">{sgstAmt.toFixed(2)} ({sgstPer}%)</td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="px-3 py-2 bg-[#f8fafc] flex justify-between items-center text-[11px] text-[#475569]">
+        <span>Total Tax: <strong className="text-[#0f172a]">₹{(igstAmt + cgstAmt + sgstAmt).toFixed(2)}</strong></span>
+        <span>Item Total: <strong className="text-[#0a6ed1]">₹{(baseValue + igstAmt + cgstAmt + sgstAmt).toFixed(2)}</strong></span>
+      </div>
+    </div>,
+    document.body
   )
 }
 
@@ -363,6 +459,7 @@ export default function CreateASN() {
 
   // Modal & submission state
   const [splitBatchItem, setSplitBatchItem] = useState(null)
+  const [taxPopup, setTaxPopup] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [successModal, setSuccessModal] = useState(null)
   const [saveWarning, setSaveWarning] = useState(null)
@@ -478,6 +575,27 @@ export default function CreateASN() {
       return acc + q * p
     }, 0)
     return sum.toFixed(2)
+  }, [selectedItems])
+
+  // Auto-populate invoice amount based on selected items + tax formula
+  useEffect(() => {
+    if (selectedItems.length > 0) {
+      const totalWithTax = selectedItems.reduce((acc, it) => {
+        const q = parseFloat(it.avlAsnQty || 0)
+        const p = parseFloat(it.supplierNetPrice || it.netPrice || 0)
+        const base = q * p
+        const igstPer = parseFloat(it.igstPer ?? 0)
+        const cgstPer = parseFloat(it.cgstPer ?? 9)
+        const sgstPer = parseFloat(it.sgstPer ?? 9)
+        const igst = it.igst && Number(it.igst) > 0 ? Number(it.igst) : (base * igstPer / 100)
+        const cgst = it.cgst && Number(it.cgst) > 0 ? Number(it.cgst) : (base * cgstPer / 100)
+        const sgst = it.sgst && Number(it.sgst) > 0 ? Number(it.sgst) : (base * sgstPer / 100)
+        return acc + base + igst + cgst + sgst
+      }, 0)
+      setInvoiceAmount(totalWithTax.toFixed(2))
+    } else {
+      setInvoiceAmount('')
+    }
   }, [selectedItems])
 
   // Create ASN Submission (Save or Save as Draft)
@@ -1037,9 +1155,16 @@ export default function CreateASN() {
                               {item.shortGrnQty || ''}
                             </td>
 
-                            {/* Net Price (Blue text) */}
+                            {/* Net Price (Blue text, clickable for Tax Breakdown) */}
                             <td className="py-3 px-3">
-                              <span className="text-[#0a6ed1] font-semibold cursor-pointer hover:underline">
+                              <span
+                                onClick={(e) => {
+                                  const r = e.currentTarget.getBoundingClientRect()
+                                  setTaxPopup(taxPopup?.item?.rowId === item.rowId ? null : { item, rect: r })
+                                }}
+                                className="text-[#0a6ed1] font-semibold cursor-pointer hover:underline"
+                                title="Click to view tax breakdown"
+                              >
                                 {item.netPrice} INR
                               </span>
                             </td>
@@ -1210,6 +1335,14 @@ export default function CreateASN() {
             </button>
           </div>
         </div>
+      )}
+      {/* Portal-based Tax Breakdown Popup */}
+      {taxPopup && (
+        <TaxBreakdownPopup
+          item={taxPopup.item}
+          rect={taxPopup.rect}
+          onClose={() => setTaxPopup(null)}
+        />
       )}
     </PageLayout>
   )
