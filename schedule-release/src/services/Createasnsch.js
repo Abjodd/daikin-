@@ -4,6 +4,7 @@
 // and mock fallback for offline development.
 // ═══════════════════════════════════════════════════════════════
 import { findAgreement, PDIR_REF_NOS, delay, sapDateDisplay } from './Mockdata.js'
+import { odataGet, fetchConfirmedItems, q, toSap8, num, sameItem } from './sapOData.js'
 
 const flag = import.meta.env.VITE_USE_MOCK
 export const USE_MOCK = flag ? flag === 'true' : false
@@ -145,8 +146,115 @@ export function buildAsnPayloadSR({ scheduleNo, header = {}, invoice = {}, items
   return { head, items: payloadItems }
 }
 
+// ── LIVE: eligible items from SAP ────────────────────────────────
+// A row per schedule line (ZCDS_SCHEDULEAGR_SCH) whose ITEM is confirmed in
+// ZP_SCH_AGREEMENT. Available qty = scheduled qty − goods received.
+function buildLiveEligibleItem(agreementId, it, l) {
+  const date = toSap8(l.ScheduleLineDeliveryDate)
+  const schLine = String(parseInt(l.ScheduleLine, 10))
+  const qty = num(l.ScheduleLineOrderQuantity)
+  const received = num(l.RoughGoodsReceiptQty)
+  const avl = Math.max(0, qty - received)
+  const uom = str(l.OrderQuantityUnit) || str(it.OrderQuantityUnit) || 'NO'
+  const price = String(num(it.NetPriceAmount))
+  const itemNo = str(it.SchedulingAgreementItem)
+
+  return {
+    itemNo: `${itemNo}-${schLine}-${date}`, // stable key, survives re-fetch / filters
+    ebelp: itemNo,
+    schLine,
+    ebeln: agreementId,
+    scheduleNo: agreementId,
+    eindt: date,
+    werks: str(it.Plant),
+    maktx: str(it.PurchasingDocumentItemText) || str(it.Material),
+    plantDesc: 'Plant',
+    perUnit: '1',
+    warningMsg: '',
+    pstyp: '',
+
+    // Tax amounts left at 0 → the page calculates them from the percentages.
+    // (The CDS views carry a TaxCode but no rates; 9% + 9% is the page's default.)
+    igst: '0', cgst: '0', sgst: '0',
+    igstPer: '0', cgstPer: '9', sgstPer: '9',
+    tax: '0',
+    currency: str(it.DocumentCurrency) || 'INR',
+
+    materialName: str(it.PurchasingDocumentItemText) || str(it.Material),
+    materialNumber: str(it.Material),
+    storageLocation: str(it.StorageLocation),
+    warehouseNo: '',
+    hsn: '',      // not in the CDS views yet
+    hsnCode: '',
+
+    shipmentDate: sapDateDisplay(date),
+    shipmentDateIso: date ? `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}` : '',
+    materialExpiry: '',
+
+    totalQty: String(qty),
+    totalUnit: uom,
+    confQty: String(qty), // item is confirmed → the whole line is
+    confUnit: uom,
+    asnCreated: '0',      // not in the CDS views yet
+    draftAsnQty: '0',
+    spq: '',              // not in the CDS views yet
+
+    avlAsnQty: String(avl),
+    delQty: '0',
+    deliveredQty: String(received),
+    deliveredUnit: uom,
+
+    netPrice: price,
+    supplierNetPrice: price,
+
+    packingMaterialQty: '1',
+    packingMaterialType: 'Trolley',
+    packagingType: 'Trolley',
+    pdirNo: '',
+
+    fgStock: String(avl),
+    qtyPerPackaging: '',
+    taxMismatch: false,
+    batches: [],
+  }
+}
+
+async function getEligibleItemsLive({ scheduleNo, fromDate, toDate, storageLocation = '' }) {
+  if (!scheduleNo) return []
+  const f = `SchedulingAgreement eq ${q(scheduleNo)}`
+  const [items, lines, confirmedItems] = await Promise.all([
+    odataGet('ZCDS_SCHDULEAGR_ITEM', { filter: f }),
+    odataGet('ZCDS_SCHEDULEAGR_SCH', { filter: f, orderby: 'ScheduleLineDeliveryDate' }),
+    fetchConfirmedItems(scheduleNo), // Map<itemAsInt, true> from ZP_SCH_AGREEMENT
+  ])
+
+  let rows = lines
+    .map((l) => {
+      const it = items.find((i) => sameItem(i.SchedulingAgreementItem, l.SchedulingAgreementItem))
+      if (!it || !confirmedItems.has(parseInt(it.SchedulingAgreementItem, 10))) return null
+      return buildLiveEligibleItem(scheduleNo, it, l)
+    })
+    .filter(Boolean)
+
+  if (fromDate) rows = rows.filter((r) => r.eindt >= isoToSap8(fromDate))
+  if (toDate) rows = rows.filter((r) => r.eindt <= isoToSap8(toDate))
+  if (storageLocation.trim()) rows = rows.filter((r) => r.storageLocation === storageLocation.trim())
+  return rows
+}
+
 export const createAsnApi = {
   async getEligibleItems({ scheduleNo, fromDate, toDate, storageLocation = '' } = {}) {
+    if (!USE_MOCK) {
+      try {
+        return await getEligibleItemsLive({ scheduleNo, fromDate, toDate, storageLocation })
+      } catch (err) {
+        // Same rule as submitAsn: fall back to mock only in local dev
+        if (!import.meta.env.DEV) throw err
+        console.warn('[Live ASN items] Falling back to mock:', err.message)
+      }
+    }
+
+    // MOCK
     await delay(350)
     const a = findAgreement(scheduleNo)
     if (!a) return []

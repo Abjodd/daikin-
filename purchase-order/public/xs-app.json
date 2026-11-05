@@ -1,10 +1,22 @@
 {
   "welcomeFile": "/index.html",
-  "authenticationMethod": "none",
+  "authenticationMethod": "route",
   "routes": [
     {
-      "source": "^(.*)$",
-      "target": "$1",
+      "source": "^(?:.*/)?(assets/.+)$",
+      "target": "/$1",
+      "service": "html5-apps-repo-rt",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^(?:.*/)?([^/]+\\.(?:js|css|map|svg|png|jpe?g|gif|ico|webp|json|txt|woff2?|ttf))$",
+      "target": "/$1",
+      "service": "html5-apps-repo-rt",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^.*$",
+      "target": "/index.html",
       "service": "html5-apps-repo-rt",
       "authenticationType": "xsuaa"
     }
