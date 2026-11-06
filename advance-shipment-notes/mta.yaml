@@ -37,8 +37,15 @@ modules:
     requires:
       - name: asn-xsuaa
       - name: asn-html5-runtime
+      - name: asn-destination
 
 resources:
+  - name: asn-destination
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite
+
   - name: asn-html5-host
     type: org.cloudfoundry.managed-service
     parameters:

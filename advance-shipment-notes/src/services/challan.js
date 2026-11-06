@@ -3,9 +3,10 @@ import JsBarcode from 'jsbarcode'
 import QRCode from 'qrcode'
 
 function barcodeDataUrl(text, opts = {}) {
+    if (!text) return null
     const canvas = document.createElement('canvas')
     try {
-        JsBarcode(canvas, text, {
+        JsBarcode(canvas, String(text), {
             format: 'CODE128',
             width: opts.width || 2,
             height: opts.height || 50,
@@ -22,8 +23,9 @@ function barcodeDataUrl(text, opts = {}) {
 }
 
 async function qrDataUrl(text, opts = {}) {
+    if (!text) return null
     try {
-        return await QRCode.toDataURL(text, {
+        return await QRCode.toDataURL(String(text), {
             width: opts.size || 200,
             margin: 0,
             errorCorrectionLevel: 'M',
@@ -37,6 +39,7 @@ async function qrDataUrl(text, opts = {}) {
 async function fetchLogoDataUrl() {
     try {
         const res = await fetch('/fiemChallan.png')
+        if (!res.ok) return null
         const blob = await res.blob()
         return new Promise(resolve => {
             const reader = new FileReader()
@@ -44,7 +47,7 @@ async function fetchLogoDataUrl() {
             reader.readAsDataURL(blob)
         })
     } catch (err) {
-        console.error('Failed to load FIEM logo', err)
+        console.error('Failed to load logo', err)
         return null
     }
 }
@@ -81,7 +84,7 @@ export async function generatePartTags(tags = []) {
         doc.rect(leftMargin, offsetY, tagW, tagH)
 
         const barcodeValue = tag.barcodeValue || '1100000093'
-        const qrValue = tag.qrValue || ''
+        const qrValue = tag.qrValue || barcodeValue || ''
 
         const partNumber = tag.partNumber || ''
         const partDesc = tag.partDesc || ''
@@ -116,6 +119,7 @@ export async function generatePartTags(tags = []) {
 
         const maxInfoWidth = tagW - 53 - 8
         const truncate = (text, maxW) => {
+            if (!text) return ''
             if (doc.getTextWidth(text) <= maxW) return text
             while (text.length > 0 && doc.getTextWidth(text + '...') > maxW) {
                 text = text.slice(0, -1)
@@ -123,13 +127,13 @@ export async function generatePartTags(tags = []) {
             return text + '...'
         }
 
-            ;[
-                partDesc,
-                `PO No - ${poNo} : ${poItem} : ${poSubItem}`,
-                `INV. No - ${invNo}`,
-                `SUPPLIER CODE - ${supplierCode}`,
-                `SUPPLIER NAME - ${truncate(supplierName, maxInfoWidth)}`,
-            ].forEach(line => { doc.text(line, MX, fy); fy += 4.3 })
+        ;[
+            partDesc,
+            `PO No - ${poNo} : ${poItem} : ${poSubItem}`,
+            `INV. No - ${invNo}`,
+            `SUPPLIER CODE - ${supplierCode}`,
+            `SUPPLIER NAME - ${truncate(supplierName, maxInfoWidth)}`,
+        ].forEach(line => { doc.text(line, MX, fy); fy += 4.3 })
 
         if (qrValue) {
             const qrImg = await qrDataUrl(qrValue, { size: 200 })
@@ -143,12 +147,9 @@ export async function generatePartTags(tags = []) {
 
         setFont('bold', 7); doc.text('PART TAG', LX, offsetY + 58)
 
-        const logoToDraw = tag.logoDataUrl || logoDataUrl
-        if (logoToDraw) {
-            doc.addImage(logoToDraw, 'PNG', MX, offsetY + 54, 35, 10)
-        } else {
-            setFont('bold', 13); doc.text('FIEM', MX, offsetY + 60)
-        }
+        // Print DEMO in bold (replaces FIEM)
+        setFont('bold', 14)
+        doc.text('DEMO', MX, offsetY + 60)
 
         setFont('normal', 7.5)
         doc.text(`ISSUE DATE- ${issueDate}`, RX, offsetY + 55, { align: 'right' })
@@ -164,12 +165,13 @@ export async function generatePartTags(tags = []) {
     return doc
 }
 
-export async function previewPartTags(tags = []) {
+export async function previewPartTags(tags = [], customFilename = '') {
     const doc = await generatePartTags(tags)
 
     const firstTag = tags[0] || {}
-    const idForName = (firstTag.barcodeValue || 'part-tags').replace(/\//g, '_')
-    const filename = `Part_Tags_${idForName}.pdf`
+    const rawBarcode = (firstTag.barcodeValue || '').replace(/[\/\\:*?"<>|]/g, '_').trim()
+    const rawName = (customFilename || rawBarcode || 'ASN').replace(/[\/\\:*?"<>|]/g, '_').trim()
+    const filename = `${rawName}.pdf`
 
     const pdfBlob = doc.output('blob')
     const blobUrl = URL.createObjectURL(pdfBlob)
