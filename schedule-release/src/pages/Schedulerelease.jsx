@@ -349,9 +349,11 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
   const handleGo = () => fetchData(fromDate, toDate, storageLocation)
 
   const handleClear = () => {
-    setFromDate(today); setToDate(defaultTo)
-    setStorageLocation(''); setMaterialFilter('')
-    setRows([]); setSelected(new Set()); setError(null)
+    setFromDate(today)
+    setToDate(defaultTo)
+    setStorageLocation('')
+    setMaterialFilter('')
+    fetchData(today, defaultTo, '')
   }
 
   // Filter by material (client-side)
@@ -366,13 +368,20 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
     )
   }, [rows, materialFilter])
 
-  // Selection is keyed by row index (string) — the "select all" check uses the same key
-  const allSelected = filteredRows.length > 0 && filteredRows.every((_, idx) => selected.has(String(idx)))
+  // Only rows that are not already confirmed in the backend can be selected
+  const selectableIdx = useMemo(
+    () => filteredRows.map((r, i) => (r.alreadyConfirmed ? null : String(i))).filter(i => i !== null),
+    [filteredRows]
+  )
+
+  const allSelected = selectableIdx.length > 0 && selectableIdx.every(k => selected.has(k))
   const toggleAll   = () => {
     if (allSelected) setSelected(new Set())
-    else setSelected(new Set(filteredRows.map((_, idx) => String(idx))))
+    else setSelected(new Set(selectableIdx))
   }
   const toggleRow = (key) => {
+    const row = filteredRows[Number(key)]
+    if (row?.alreadyConfirmed) return
     const s = new Set(selected)
     s.has(key) ? s.delete(key) : s.add(key)
     setSelected(s)
@@ -387,8 +396,11 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
     setConfirmModal(false)
     setSubmitting(true)
     try {
-      const selectedRows = filteredRows.filter((r, idx) => selected.has(String(idx)))
+      const selectedRows = filteredRows.filter((r, idx) => selected.has(String(idx)) && !r.alreadyConfirmed)
       await scheduleReleaseApi.submitConfirm(agreement.id, selectedRows)
+      // Immediately mark rows in local state as alreadyConfirmed
+      setRows(prev => prev.map((r, idx) => selected.has(String(idx)) ? { ...r, alreadyConfirmed: true, confirmedQty: r.requiredQty, confkey: 'X' } : r))
+      setSelected(new Set())
       setSubmitted(true)
     } catch (e) {
       setError(e.message)
@@ -507,8 +519,8 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
               <tr className="bg-gradient-to-b from-[#fafbfc] to-[#f5f6f7] border-b border-[#e5e5e5] text-[#6a6d70]">
                 <th className="py-3 px-3 w-10">
                   <input
-                    type="checkbox" checked={allSelected} onChange={toggleAll}
-                    className="w-4 h-4 accent-[#0a6ed1] cursor-pointer"
+                    type="checkbox" checked={allSelected} disabled={selectableIdx.length === 0} onChange={toggleAll}
+                    className="w-4 h-4 accent-[#0a6ed1] cursor-pointer disabled:cursor-not-allowed"
                   />
                 </th>
                 {['Item', 'Material', 'Delivery Schedule', 'Confirmed Qty', 'ASN Qty', 'Delivery Date'].map(h => (
@@ -533,15 +545,24 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
                   <tr
                     key={key}
                     onClick={() => toggleRow(key)}
-                    className={`border-b border-[#f0f0f0] last:border-b-0 cursor-pointer transition-colors ${isSelected ? 'bg-[#ebf5ff]' : 'hover:bg-[#fafbfc]'}`}
+                    className={`border-b border-[#f0f0f0] last:border-b-0 transition-colors ${
+                      r.alreadyConfirmed ? 'bg-[#f5f6f7] opacity-60 cursor-not-allowed' : isSelected ? 'bg-[#ebf5ff] cursor-pointer' : 'hover:bg-[#fafbfc] cursor-pointer'
+                    }`}
                   >
                     <td className="py-3 px-3" onClick={e => { e.stopPropagation(); toggleRow(key) }}>
                       <input
-                        type="checkbox" checked={isSelected} onChange={() => toggleRow(key)}
-                        className="w-4 h-4 accent-[#0a6ed1] cursor-pointer"
+                        type="checkbox" checked={isSelected} disabled={r.alreadyConfirmed} onChange={() => toggleRow(key)}
+                        className="w-4 h-4 accent-[#0a6ed1] cursor-pointer disabled:cursor-not-allowed"
                       />
                     </td>
-                    <td className="py-3 px-3 font-semibold text-[#32363a]">{r.itemNo || '—'}</td>
+                    <td className="py-3 px-3 font-semibold text-[#32363a]">
+                      {r.itemNo || '—'}
+                      {r.alreadyConfirmed && (
+                        <span className="ml-2 text-[10px] font-bold text-[#16a34a] bg-[#e8f5e9] px-2 py-0.5 rounded">
+                          Confirmed
+                        </span>
+                      )}
+                    </td>
                     <td className="py-3 px-3">
                       <div className="font-semibold text-[#0a6ed1] text-[12px]">{r.materialNo || '—'}</div>
                       <div className="text-[#6a6d70] text-[11px] truncate max-w-[200px]">{r.materialDesc || ''}</div>
@@ -768,7 +789,7 @@ export default function ScheduleRelease() {
     return agreement.items.filter(item => {
       const lines = item.scheduleLines || []
       if (lines.length === 0) {
-        const itemIso = item.deliveryDateIso || toStandardIso(item.deliveryDate)
+        const itemIso = item.deliveryDateIso || toStandardIso(item.deliveryDateRaw) || toStandardIso(item.deliveryDate)
         if (!itemIso) return true
         if (fromIso && itemIso < fromIso) return false
         if (toIso && itemIso > toIso) return false
@@ -776,10 +797,8 @@ export default function ScheduleRelease() {
       }
 
       return lines.some(line => {
-        const lineIso = line.deliveryDateRaw
-          ? toStandardIso(line.deliveryDateRaw)
-          : toStandardIso(line.deliveryDate)
-        if (!lineIso) return true
+        const lineIso = toStandardIso(line.deliveryDateRaw) || toStandardIso(line.deliveryDate)
+        if (!lineIso) return false
         if (fromIso && lineIso < fromIso) return false
         if (toIso && lineIso > toIso) return false
         return true
@@ -817,12 +836,26 @@ export default function ScheduleRelease() {
 
   const handleConfirm = () => setShowConfirmView(true)
 
-  // Called after confirm success — closes confirm view and re-fetches agreement
-  const handleConfirmSuccess = () => {
+  // Called after confirm success — closes confirm view and re-fetches agreement list and details in-place
+  const handleConfirmSuccess = async () => {
     setShowConfirmView(false)
     const id = selectedAgreementId
-    setSelectedAgreementId(null)
-    setTimeout(() => setSelectedAgreementId(id), 0)
+    if (id) {
+      try {
+        const [freshList, freshAgr] = await Promise.all([
+          scheduleReleaseApi.listAgreements({
+            search: searchQuery,
+            plants: selectedPlants,
+            vendorNo: !isPartner ? activeSupplier : '',
+          }),
+          scheduleReleaseApi.getAgreement(id),
+        ])
+        setAgreements(freshList)
+        setAgreement(freshAgr)
+      } catch (err) {
+        console.error('Failed to reload agreement after confirm:', err)
+      }
+    }
   }
 
   // ── Navigate to line item detail page ──

@@ -8,9 +8,7 @@ import { createAsnApi, uploadAllAttachments } from '../services/Createasnsch.js'
 // Matches an agreement in services/.../mockData.js that has confirmed lines.
 const MOCK_FALLBACK_AGREEMENT = { id: '5500012345', plant: '1001' }
 
-// ═══════════════════════════════════════════════════════════════
-// FILE / ATTACHMENT HELPERS
-// ═══════════════════════════════════════════════════════════════
+// ─── CONSTANTS ──────────────────────────────────────────────────
 const ALLOWED_EXTENSIONS = ['pdf', 'xls', 'xlsx']
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -55,38 +53,26 @@ const USER_EDITABLE_FIELDS = [
   'packagingType', 'qtyPerPackaging', 'pdirNo', 'batches',
 ]
 
-// ═══════════════════════════════════════════════════════════════
-// MOBILE HOOK
-// Below `breakpoint` the stacked card layout is used; above it the multi-column desktop card.
-// 1024 = Tailwind `lg`, so tablets in portrait also get the roomier stacked card.
-// ═══════════════════════════════════════════════════════════════
-function useIsMobile(breakpoint = 1024) {
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth < breakpoint)
-  useEffect(() => {
-    const handler = () => setIsMobile(window.innerWidth < breakpoint)
-    window.addEventListener('resize', handler)
-    return () => window.removeEventListener('resize', handler)
-  }, [breakpoint])
-  return isMobile
+// ─── HELPERS ────────────────────────────────────────────────────
+// Normalise 'YYYY-MM-DD', 'DD.MM.YYYY' or 'MMM DD, YYYY' to 'YYYY-MM-DD' (local time, no UTC shift). Returns null if unparseable.
+const toIsoDate = (val) => {
+  if (!val) return null
+  const s = String(val).trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  if (s.includes('.')) {
+    const parts = s.split('.')
+    if (parts.length === 3 && parts[2].length === 4) {
+      return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`
+    }
+  }
+  const dt = new Date(s + ' 12:00:00')
+  if (isNaN(dt.getTime())) return null
+  const y = dt.getFullYear()
+  const m = String(dt.getMonth() + 1).padStart(2, '0')
+  const d = String(dt.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
-// ═══════════════════════════════════════════════════════════════
-// SHARED FIELD HELPERS — MODULE SCOPE
-// ═══════════════════════════════════════════════════════════════
-function Field({ label, children, className = '' }) {
-  return (
-    <div className={`flex flex-col gap-1 min-w-0 ${className}`}>
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-[#9ca3af] leading-tight">{label}</span>
-      {children}
-    </div>
-  )
-}
-
-function ReadonlyVal({ value, accent }) {
-  return (
-    <span className={`text-[13px] font-semibold truncate ${accent ? 'text-[#0a6ed1]' : 'text-[#32363a]'}`}>{value}</span>
-  )
-}
 function getAvlAsnQtyError(item) {
   const avl = parseFloat(item.avlAsnQty || 0)
   const created = parseFloat(item.asnCreated || 0)
@@ -96,9 +82,50 @@ function getAvlAsnQtyError(item) {
   if (created + avl > total) return `exceeds Total Qty (${total}).`
   return null
 }
-// ═══════════════════════════════════════════════════════════════
-// TAX BREAKDOWN POPUP (PORTAL-BASED — FLOATS ABOVE TABLE)
-// ═══════════════════════════════════════════════════════════════
+
+const getFgStockError = (item) =>
+  item.fgStock !== '' && item.fgStock != null && parseFloat(item.fgStock) < parseFloat(item.avlAsnQty || 0)
+    ? `Must be >= ${item.avlAsnQty}`
+    : null
+
+// Batch summary text, e.g. "3 Boxes" or "2 batches"
+const batchLabel = (item, count) =>
+  item.packingMaterialType
+    ? `${count} ${item.packingMaterialType}${count > 1 ? 's' : ''}`
+    : `${count} batch${count > 1 ? 'es' : ''}`
+
+// ─── TAX MISMATCH SWITCH ─────────────────────────────────────────
+function TaxMismatchSwitch({ value, onChange }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!value)}
+      className={`inline-flex items-center h-6 px-1 rounded-full transition-all border text-[11px] font-bold select-none cursor-pointer ${
+        value
+          ? 'bg-[#0a6ed1] border-[#0a6ed1] text-white'
+          : 'bg-[#f3f4f6] border-[#d1d5db] text-[#4b5563]'
+      }`}
+      style={{ minWidth: 54 }}
+    >
+      <span
+        className={`w-4 h-4 rounded-full bg-white shadow-sm flex items-center justify-center text-[10px] transform transition-transform ${
+          value ? 'translate-x-6 text-[#0a6ed1]' : 'translate-x-0 text-[#9ca3af]'
+        }`}
+      >
+        {value ? (
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        ) : null}
+      </span>
+      <span className={`text-[10px] font-bold tracking-tight px-1.5 ${value ? '-order-1' : ''}`}>
+        {value ? 'YES' : 'NO'}
+      </span>
+    </button>
+  )
+}
+
+// ─── TAX BREAKDOWN POPUP (PORTAL-BASED — FLOATS ABOVE TABLE) ───────
 function TaxBreakdownPopup({ item, rect, onClose }) {
   const popupRef = useRef(null)
 
@@ -193,34 +220,7 @@ function TaxBreakdownPopup({ item, rect, onClose }) {
   )
 }
 
-// ═══════════════════════════════════════════════════════════════
-// TAX MISMATCH TOGGLE
-// ═══════════════════════════════════════════════════════════════
-function TaxMismatchToggle({ value, onChange, compact = false, disabled = false }) {
-  return (
-    <div
-      className={`flex rounded-lg overflow-hidden border border-[#d9d9d9] ${compact ? 'h-8' : ''} ${disabled ? 'opacity-40' : ''}`}
-      style={{ minWidth: compact ? 72 : 88 }}
-    >
-      <button
-        type="button"
-        onClick={() => !disabled && onChange(true)}
-        disabled={disabled}
-        className={`flex-1 text-[11px] font-bold transition-all px-3 ${value ? 'bg-[#107e3e] text-white' : 'bg-white text-[#9ca3af] hover:bg-[#f0f0f0]'} disabled:cursor-not-allowed`}
-      >YES</button>
-      <button
-        type="button"
-        onClick={() => !disabled && onChange(false)}
-        disabled={disabled}
-        className={`flex-1 text-[11px] font-bold border-l border-[#d9d9d9] transition-all px-3 ${!value ? 'bg-[#cc1c14] text-white' : 'bg-white text-[#9ca3af] hover:bg-[#f0f0f0]'} disabled:cursor-not-allowed`}
-      >NO</button>
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════
-// SPLIT BATCH MODAL
-// ═══════════════════════════════════════════════════════════════
+// ─── SPLIT BATCH MODAL ───────────────────────────────────────────
 function SplitBatchModal({ open, item, onClose, onSave }) {
   const [rows, setRows] = useState([])
   const [error, setError] = useState(null)
@@ -375,9 +375,7 @@ function SplitBatchModal({ open, item, onClose, onSave }) {
   )
 }
 
-// ═══════════════════════════════════════════════════════════════
-// CONFIRMATION MODAL
-// ═══════════════════════════════════════════════════════════════
+// ─── CONFIRMATION MODAL ──────────────────────────────────────────
 function ConfirmationModal({ open, kind, title, message, details, primaryLabel, secondaryLabel, onPrimary, onSecondary }) {
   if (!open) return null
   const palette = {
@@ -407,330 +405,30 @@ function ConfirmationModal({ open, kind, title, message, details, primaryLabel, 
   )
 }
 
-// ═══════════════════════════════════════════════════════════════
-// MOBILE ITEM CARD
-// ═══════════════════════════════════════════════════════════════
-function MobileItemCard({ item, isSelected, onToggle, onUpdate, onSplitBatch, onTaxPopup, packagingTypes, pdirOptions, originalQty }) {
-  const [expanded, setExpanded] = useState(false)
-  const isZeroQty = originalQty === 0
-  const batchCount = item.batches?.length || 0
-  const batchSum = (item.batches || []).reduce((s, b) => s + parseFloat(b.quantity || 0), 0)
-  const target = parseFloat(item.avlAsnQty || 0)
-  const batchBalanced = batchCount > 0 && Math.abs(batchSum - target) < 0.0001
-
-  return (
-    <div className={`rounded-xl border mb-3 overflow-hidden transition-colors ${isZeroQty ? 'bg-[#fafbfc] border-[#e5e5e5] opacity-60' : isSelected ? 'bg-[#ebf5ff] border-[#0a6ed1]' : 'bg-white border-[#e5e5e5]'}`}>
-      <div className="flex items-center gap-3 px-4 py-3">
-        <input type="checkbox" checked={isSelected} onChange={isZeroQty ? undefined : onToggle} disabled={isZeroQty} className="accent-[#0a6ed1] w-4 h-4 flex-shrink-0 disabled:cursor-not-allowed disabled:opacity-40" />
-        <div className="flex-1 min-w-0">
-          <div className="text-[#0a6ed1] font-semibold text-[13px]">{item.materialNumber}</div>
-          <div className="text-[#6a6d70] text-[12px] truncate">{item.materialName}</div>
-        </div>
-        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <span className="px-2 py-0.5 bg-[#ebf5ff] text-[#0a6ed1] rounded-full text-[11px] font-bold whitespace-nowrap">Item {item.ebelp} / Sch {item.schLine}</span>
-          {isZeroQty && <span className="px-2 py-0.5 bg-[#fce8e6] text-[#cc1c14] rounded text-[11px] font-semibold">No qty</span>}
-        </div>
-        <button onClick={() => setExpanded(e => !e)} className="text-[#6a6d70] flex-shrink-0 p-1" style={{ background: 'none', border: 'none', cursor: 'pointer' }} aria-label={expanded ? 'Collapse' : 'Expand'}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}><path d="M6 9l6 6 6-6" /></svg>
-        </button>
-      </div>
-
-      <div className="flex border-t border-[#f0f0f0] text-center">
-        {[
-          { label: 'Permissible ASN', value: `${item.avlAsnQty} ${item.totalUnit}` },
-          { label: 'Net Price', value: `₹${item.netPrice}` },
-          { label: 'Shipment', value: item.shipmentDate },
-        ].map((s, i) => (
-          <div key={i} className={`flex-1 min-w-0 px-1 py-2 ${i < 2 ? 'border-r border-[#f0f0f0]' : ''}`}>
-            <div className="text-[10px] text-[#9ca3af] font-semibold uppercase tracking-wide">{s.label}</div>
-            <div className={`text-[12px] font-bold mt-0.5 truncate ${i === 0 && isZeroQty ? 'text-[#cc1c14]' : 'text-[#32363a]'}`}>{s.value}</div>
-          </div>
-        ))}
-      </div>
-
-      {expanded && (
-        <div className="border-t border-[#f0f0f0] bg-[#fafbfc] px-4 py-4">
-          <button
-            onClick={() => onSplitBatch(item)} disabled={isZeroQty}
-            className={`w-full flex items-center justify-between gap-2 mb-4 px-3 h-10 text-[13px] font-semibold rounded-lg border transition-all ${isZeroQty ? 'opacity-40 cursor-not-allowed text-[#6a6d70] bg-[#f5f5f5] border-[#d9d9d9]' : 'text-[#0a6ed1] bg-[#ebf5ff] border-[#0a6ed1] hover:bg-[#d9ecff] hover:scale-[1.01] active:scale-[0.99]'}`}
-          >
-            <span className="flex items-center gap-1.5">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3v12M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9c0 6-12 0-12 12" /></svg>
-              Split Quantity
-            </span>
-            {batchCount > 0 && (
-              <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${batchBalanced ? 'bg-[#e8f5ec] text-[#107e3e]' : 'bg-[#fef7e6] text-[#b45309]'}`}>
-                {batchCount} {item.packingMaterialType || 'batch'}{batchCount > 1 && item.packingMaterialType ? 's' : ''}{!batchBalanced ? ' · unbalanced' : ' · balanced'}
-              </span>
-            )}
-          </button>
-          {!isZeroQty && parseInt(item.packingMaterialQty, 10) > 0 && batchCount === 0 && isSelected && (
-            <p className="text-[11px] font-semibold text-[#cc1c14] -mt-2 mb-3">
-              ⚠ Split quantity required before creating ASN
-            </p>
-          )}
-
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">
-            {[
-              { label: 'Sch Line', value: `${item.ebelp} / ${item.schLine}` },
-              { label: 'Net Price', value: `${item.netPrice} INR`, isPrice: true },
-              { label: 'Total Qty', value: `${item.totalQty} ${item.totalUnit}` },
-              { label: 'Confirm Qty', value: `${item.confQty} ${item.confUnit}` },
-              { label: 'Delivered Qty', value: `${item.deliveredQty} ${item.deliveredUnit}` },
-              { label: 'ASN Created', value: item.asnCreated },
-              { label: 'SPQ', value: item.spq },
-            ].map((d, i) => (
-              <div key={i} className="bg-white rounded-lg px-3 py-2 border border-[#e5e5e5] min-w-0">
-                <div className="text-[10px] text-[#9ca3af] font-semibold uppercase tracking-wide">{d.label}</div>
-                {d.isPrice ? (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      const r = e.currentTarget.getBoundingClientRect()
-                      onTaxPopup && onTaxPopup({ item, rect: r })
-                    }}
-                    className="text-[13px] text-[#0a6ed1] font-bold mt-0.5 truncate hover:underline text-left cursor-pointer"
-                    title="Click to view tax breakdown"
-                  >
-                    {d.value}
-                  </button>
-                ) : (
-                  <div className="text-[13px] text-[#32363a] font-semibold mt-0.5 truncate">{d.value}</div>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Editable fields: single column on phones, two columns on larger (tablet) widths */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
-            <div className="mb-3">
-              <label className="block text-[12px] font-semibold text-[#374151] mb-1">
-                Permissible ASN Qty
-              </label>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={item.avlAsnQty}
-                onChange={e => onUpdate('avlAsnQty', e.target.value)}
-                disabled={isZeroQty}
-                className={`w-full h-10 rounded-lg border bg-white px-3 text-[14px] outline-none focus:ring-2 transition-all disabled:bg-[#f5f5f5] disabled:cursor-not-allowed ${
-                  getAvlAsnQtyError(item)
-                    ? 'border-[#cc1c14] focus:border-[#cc1c14] focus:ring-[#cc1c14]/20'
-                    : 'border-[#d9d9d9] focus:border-[#0a6ed1] focus:ring-[#0a6ed1]/20'
-                }`}
-              />
-              {getAvlAsnQtyError(item) && (
-                <p className="text-[11px] text-[#cc1c14] font-semibold mt-1">
-                  {getAvlAsnQtyError(item)}
-                </p>
-              )}
-            </div>
-            <div className="mb-3">
-              <label className="block text-[12px] font-semibold text-[#374151] mb-1">FG Stock</label>
-              <input type="number" inputMode="decimal" min="0" step="any" value={item.fgStock} onChange={e => onUpdate('fgStock', e.target.value)} onWheel={e => e.target.blur()} placeholder="0"
-                className={`w-full h-10 rounded-lg border bg-white px-3 text-[14px] outline-none focus:ring-2 transition-all ${item.fgStock !== '' && parseFloat(item.fgStock) < parseFloat(item.avlAsnQty || 0) ? 'border-[#cc1c14] focus:border-[#cc1c14] focus:ring-[#cc1c14]/20' : 'border-[#d9d9d9] focus:border-[#0a6ed1] focus:ring-[#0a6ed1]/20'}`} />
-              {item.fgStock !== '' && parseFloat(item.fgStock) < parseFloat(item.avlAsnQty || 0) && (
-                <p className="text-[11px] text-[#cc1c14] font-semibold mt-1">Must be &gt;= {item.avlAsnQty}</p>
-              )}
-            </div>
-            <div className="mb-3">
-              <label className="block text-[12px] font-semibold text-[#374151] mb-1">Supplier Net Price</label>
-              <input type="text" inputMode="decimal" value={item.supplierNetPrice} onChange={e => onUpdate('supplierNetPrice', e.target.value)} className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-3 text-[14px] outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all" />
-            </div>
-            <div className="mb-3">
-              <label className="block text-[12px] font-semibold text-[#374151] mb-1">Material Expiry</label>
-              <input type="date" value={item.materialExpiry} onChange={e => onUpdate('materialExpiry', e.target.value)} className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-3 text-[14px] outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all" />
-            </div>
-            <div className="mb-3">
-              <label className="block text-[12px] font-semibold text-[#374151] mb-1">Packing Type <span className="text-[#cc1c14]">*</span></label>
-              <select value={item.packagingType} onChange={e => onUpdate('packagingType', e.target.value)} className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-2 text-[13px] outline-none focus:border-[#0a6ed1]">
-                <option value="">Select</option>
-                {(packagingTypes || []).map(pt => (
-                  <option key={pt} value={pt}>{pt}</option>
-                ))}
-              </select>
-            </div>
-            <div className="mb-3">
-              <label className="block text-[12px] font-semibold text-[#374151] mb-1">Packing Qty <span className="text-[#cc1c14]">*</span></label>
-              <input type="text" inputMode="numeric" value={item.packingMaterialQty} onChange={e => onUpdate('packingMaterialQty', e.target.value.replace(/^0+/, ''))} className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-3 text-[14px] outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 text-center transition-all" />
-            </div>
-            <div className="mb-3">
-              <label className="block text-[12px] font-semibold text-[#374151] mb-1">PDIR No.</label>
-              <select value={item.pdirNo} onChange={e => onUpdate('pdirNo', e.target.value)} className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-2 text-[13px] outline-none focus:border-[#0a6ed1]">
-                <option value="">Select</option>
-                {(pdirOptions || []).map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-            <div className="mb-3 flex items-end">
-              <div className="w-full flex items-center justify-between bg-white rounded-lg px-3 h-10 border border-[#e5e5e5]">
-                <span className="text-[13px] font-semibold text-[#374151]">Tax Mismatch</span>
-                <TaxMismatchToggle value={item.taxMismatch} onChange={val => onUpdate('taxMismatch', val)} compact disabled={isZeroQty} />
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════
-// DESKTOP ITEM CARD
-// Grids step up with the viewport: 2 cols → 4 → 8 (row 1), 2 → 3 → 5 (row 2)
-// ═══════════════════════════════════════════════════════════════
-function DesktopItemCard({ item, isSelected, onToggle, onUpdate, onSplitBatch, onTaxPopup, packagingTypes, pdirOptions, originalQty }) {
-  const isZeroQty = originalQty === 0
-  const bc = item.batches?.length || 0
-  const bsum = (item.batches || []).reduce((s, b) => s + parseFloat(b.quantity || 0), 0)
-  const balanced = bc > 0 && Math.abs(bsum - parseFloat(item.avlAsnQty || 0)) < 0.0001
-
-  const inputCls = "h-8 px-2 text-[12px] border border-[#d9d9d9] rounded bg-white focus:outline-none focus:border-[#0a6ed1] focus:ring-1 focus:ring-[#0a6ed1]/20 transition-all w-full"
-  const selectCls = "h-8 px-1.5 text-[12px] border border-[#d9d9d9] rounded bg-white focus:outline-none focus:border-[#0a6ed1] transition-all w-full"
-
-  return (
-    <div className={`rounded-xl border transition-all mb-3 overflow-hidden ${isZeroQty ? 'border-[#e5e5e5] bg-[#fafbfc] opacity-60' : isSelected ? 'border-[#0a6ed1] bg-[#f5f9ff]' : 'border-[#e5e5e5] bg-white hover:border-[#c5d8f0]'}`}>
-      <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b ${isZeroQty ? 'border-[#f0f0f0] bg-[#fafbfc]' : isSelected ? 'border-[#cce0f5] bg-[#ebf5ff]' : 'border-[#f0f0f0] bg-[#fafbfc]'}`}>
-        <input type="checkbox" checked={isSelected} onChange={isZeroQty ? undefined : onToggle} disabled={isZeroQty} className="accent-[#0a6ed1] w-4 h-4 flex-shrink-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" title={isZeroQty ? 'No deliverable qty — cannot include in ASN' : undefined} />
-        <span className="flex-shrink-0 px-2.5 py-1 bg-[#0a6ed1] text-white rounded-md text-[11px] font-bold tracking-wide">Item {item.ebelp}</span>
-        <span className="flex-shrink-0 px-2 py-1 bg-[#e8f5ec] text-[#107e3e] rounded text-[11px] font-bold">Sch {item.schLine}</span>
-        <div className="flex items-center gap-2 min-w-0 flex-1 basis-[220px]">
-          <span className="text-[13px] font-bold text-[#0a6ed1] flex-shrink-0">{item.materialNumber}</span>
-          <span className="text-[#6a6d70] text-[12px] truncate">{item.materialName}</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 flex-shrink-0">
-          {isZeroQty && <span className="px-2 py-0.5 bg-[#fce8e6] text-[#cc1c14] rounded text-[11px] font-semibold">No qty available</span>}
-          <span className="text-[11px] text-[#6a6d70]">Ship: <strong className="text-[#32363a]">{item.shipmentDate}</strong></span>
-          <span className="text-[11px] text-[#6a6d70]">SPQ: <strong className="text-[#32363a]">{item.spq}</strong></span>
-        </div>
-      </div>
-
-      <div className="px-4 py-3 space-y-3">
-        {/* ROW 1 */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-3">
-          <Field label="Total Qty"><ReadonlyVal value={`${item.totalQty} ${item.totalUnit}`} accent /></Field>
-          <Field label="Conf. Qty"><ReadonlyVal value={`${item.confQty} ${item.confUnit}`} /></Field>
-          <Field label="Delivered Qty"><ReadonlyVal value={`${item.deliveredQty} ${item.deliveredUnit}`} /></Field>
-          <Field label="ASN Created"><ReadonlyVal value={item.asnCreated} /></Field>
-          <Field label="Permissible ASN Qty">
-            <input
-              type="text"
-              value={item.avlAsnQty}
-              onChange={e => onUpdate('avlAsnQty', e.target.value)}
-              disabled={isZeroQty}
-              className={
-                inputCls +
-                ' font-semibold text-[#0a6ed1] disabled:bg-[#f5f5f5] disabled:cursor-not-allowed' +
-                (getAvlAsnQtyError(item) ? ' border-[#cc1c14] ring-1 ring-[#cc1c14]/30' : '')
-              }
-            />
-            {getAvlAsnQtyError(item) && (
-              <span className="text-[10px] text-[#cc1c14] font-semibold leading-tight">
-                {getAvlAsnQtyError(item)}
-              </span>
-            )}
-          </Field>
-          <Field label="FG Stock">
-            <input type="number" min="0" step="any" value={item.fgStock} onChange={e => onUpdate('fgStock', e.target.value)} onWheel={e => e.target.blur()} placeholder="0" disabled={isZeroQty}
-              className={inputCls + ' disabled:bg-[#f5f5f5] disabled:cursor-not-allowed' + (item.fgStock !== '' && parseFloat(item.fgStock) < parseFloat(item.avlAsnQty || 0) ? ' border-[#cc1c14] ring-1 ring-[#cc1c14]/30' : '')} />
-            {item.fgStock !== '' && parseFloat(item.fgStock) < parseFloat(item.avlAsnQty || 0) && (
-              <span className="text-[10px] text-[#cc1c14] font-semibold leading-tight">Must be &gt;= {item.avlAsnQty}</span>
-            )}
-          </Field>
-          <Field label="Net Price">
-            <button
-              type="button"
-              onClick={(e) => {
-                const r = e.currentTarget.getBoundingClientRect()
-                onTaxPopup && onTaxPopup({ item, rect: r })
-              }}
-              className="text-[#0a6ed1] font-bold text-left hover:underline cursor-pointer"
-              title="Click to view tax breakdown"
-            >
-              {item.netPrice} INR
-            </button>
-          </Field>
-          <Field label="Supplier Net Price">
-            <input type="text" value={item.supplierNetPrice} onChange={e => onUpdate('supplierNetPrice', e.target.value)} disabled={isZeroQty} className={inputCls + ' disabled:bg-[#f5f5f5] disabled:cursor-not-allowed'} />
-          </Field>
-        </div>
-
-        {/* ROW 2 */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
-          <Field label="Material Expiry">
-            <input type="date" value={item.materialExpiry} onChange={e => onUpdate('materialExpiry', e.target.value)} disabled={isZeroQty} className={inputCls + ' disabled:bg-[#f5f5f5] disabled:cursor-not-allowed'} />
-          </Field>
-          <Field label="Tax Mismatch">
-            <TaxMismatchToggle value={item.taxMismatch} onChange={val => onUpdate('taxMismatch', val)} compact disabled={isZeroQty} />
-          </Field>
-          <Field label={<>Type of Packaging <span className="text-[#cc1c14]">*</span></>}>
-            <select value={item.packagingType} onChange={e => onUpdate('packagingType', e.target.value)} disabled={isZeroQty} className={selectCls + ' disabled:bg-[#f5f5f5] disabled:cursor-not-allowed'}>
-              <option value="">Select</option>
-              {packagingTypes.map(opt => (<option key={opt} value={opt}>{opt}</option>))}
-            </select>
-          </Field>
-          <Field label={<>Packing Material Qty <span className="text-[#cc1c14]">*</span></>} className="xl:max-w-[140px]">
-            <input type="text" value={item.packingMaterialQty} onChange={e => onUpdate('packingMaterialQty', e.target.value.replace(/^0+/, ''))} placeholder="0" disabled={isZeroQty} className={inputCls + ' text-center disabled:bg-[#f5f5f5] disabled:cursor-not-allowed'} />
-          </Field>
-          <Field label="PDIR No.">
-            <select value={item.pdirNo} onChange={e => onUpdate('pdirNo', e.target.value)} disabled={isZeroQty} className={selectCls + ' disabled:bg-[#f5f5f5] disabled:cursor-not-allowed'}>
-              <option value="">Select</option>
-              {(pdirOptions || []).map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </Field>
-        </div>
-
-        {/* ROW 3 — Split Batch */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pt-1 border-t border-[#f0f0f0]">
-          {(() => {
-            const maxBatches = parseInt(item.packingMaterialQty, 10)
-            const batchDisabled = isZeroQty || !item.packingMaterialQty || isNaN(maxBatches) || maxBatches < 1
-            return (
-              <>
-                <button
-                  onClick={() => !batchDisabled && onSplitBatch(item)} disabled={batchDisabled}
-                  className={`flex items-center gap-2 px-4 h-8 text-[12px] font-semibold rounded-lg border transition-all ${batchDisabled ? 'opacity-40 cursor-not-allowed text-[#6a6d70] bg-[#f5f5f5] border-[#d9d9d9]' : bc > 0 ? balanced ? 'text-[#107e3e] bg-[#e8f5ec] border-[#107e3e] hover:scale-[1.02] active:scale-[0.98]' : 'text-[#b45309] bg-[#fef7e6] border-[#b45309] hover:scale-[1.02] active:scale-[0.98]' : 'text-white bg-[#0a6ed1] border-[#0a6ed1] hover:bg-[#085caf] hover:scale-[1.02] active:scale-[0.98]'}`}
-                >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3v12M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9c0 6-12 0-12 12" /></svg>
-                  Split Quantity{bc > 0 ? ` (${bc}/${maxBatches || '?'})` : ' +'}
-                </button>
-                {!isZeroQty && batchDisabled && <span className="text-[11px] text-[#9ca3af]">Enter Packing Material Qty to enable split</span>}
-                {isZeroQty && <span className="text-[11px] text-[#9ca3af]">No deliverable qty — row excluded from ASN</span>}
-                {!batchDisabled && bc > 0 && (
-                  <span className={`text-[12px] font-semibold ${balanced ? 'text-[#107e3e]' : 'text-[#b45309]'}`}>
-                    {balanced
-                      ? `✓ ${bc} ${item.packingMaterialType}${bc > 1 && item.packingMaterialType ? 's' : ''} — balanced`
-                      : `⚠ ${bc} ${item.packingMaterialType}${bc > 1 && item.packingMaterialType ? 's' : ''} — quantities unbalanced`}
-                  </span>
-                )}
-              </>
-            )
-          })()}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════
-// ATTACHMENTS PANEL
-// ═══════════════════════════════════════════════════════════════
-function AttachmentsPanel({ kind, items, onUpload, onRemove }) {
+// ─── ATTACHMENTS PANEL (General / PDIR sub-tabs inside, like the PO page) ──
+function AttachmentsPanel({ generalAttachments, pdirAttachments, onUpload, onRemove, onReject }) {
+  const [activeSub, setActiveSub] = useState('general')
   const inputRef = useRef(null)
+
+  const items = activeSub === 'general' ? generalAttachments : pdirAttachments
 
   const processFiles = (files) => {
     for (const file of files) {
-      if (!isAllowedFile(file)) { onUpload(null, `"${file.name}" is not allowed. Only PDF / Excel (.pdf, .xls, .xlsx).`); continue }
+      if (!isAllowedFile(file)) {
+        onReject(`"${file.name}" is not allowed. Only PDF / Excel (.pdf, .xls, .xlsx).`)
+        continue
+      }
       onUpload({
-        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         name: file.name,
         size: file.size,
-        kind,
+        kind: activeSub,
         _file: file,
       })
     }
   }
 
-  const handleSelect = (e) => {
+  const handleFileChange = (e) => {
     processFiles(Array.from(e.target.files))
     e.target.value = ''
   }
@@ -741,39 +439,82 @@ function AttachmentsPanel({ kind, items, onUpload, onRemove }) {
   }
 
   return (
-    <div className="bg-white border border-[#e5e5e5] rounded-xl shadow-sm overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-[#e5e5e5]">
-        <div className="min-w-0">
-          <h3 className="text-[16px] sm:text-[18px] font-bold text-[#32363a]">{kind === 'pdir' ? 'PDIR Attachments' : 'General Attachments'} ({items.length})</h3>
-          <p className="text-[12px] text-[#6a6d70] mt-0.5">Files will be uploaded after the ASN is created</p>
-        </div>
-        <button onClick={() => inputRef.current?.click()} className="flex items-center gap-1.5 px-4 h-9 text-[14px] font-semibold text-[#0a6ed1] bg-[#ebf5ff] border border-[#0a6ed1] rounded-lg hover:bg-[#d9ecff] hover:scale-[1.02] active:scale-[0.98] transition-all">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-          Add
+    <div className="p-4 sm:p-6">
+      <div className="flex items-center gap-3 border-b border-[#e5e5e5] mb-5 overflow-x-auto">
+        <button
+          onClick={() => setActiveSub('general')}
+          className={`pb-3 px-4 text-[13px] sm:text-[14px] font-bold border-b-2 whitespace-nowrap transition-all flex items-center gap-1 ${
+            activeSub === 'general'
+              ? 'border-[#0a6ed1] text-[#0a6ed1]'
+              : 'border-transparent text-[#6b7280] hover:text-[#111827]'
+          }`}
+        >
+          General Attachments ({generalAttachments.length})
+          {generalAttachments.length === 0 && <span className="text-[#cc1c14] text-[16px] font-bold leading-none">*</span>}
         </button>
-        <input ref={inputRef} type="file" multiple accept=".pdf,.xls,.xlsx,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleSelect} className="hidden" />
+        <button
+          onClick={() => setActiveSub('pdir')}
+          className={`pb-3 px-4 text-[13px] sm:text-[14px] font-bold border-b-2 whitespace-nowrap transition-all ${
+            activeSub === 'pdir'
+              ? 'border-[#0a6ed1] text-[#0a6ed1]'
+              : 'border-transparent text-[#6b7280] hover:text-[#111827]'
+          }`}
+        >
+          PDIR Attachments ({pdirAttachments.length})
+        </button>
       </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+        <span className="text-[12px] sm:text-[13px] text-[#6b7280]">
+          Upload required invoices or inspection documents (PDF, XLS, XLSX). Files will be uploaded after the ASN is created.
+        </span>
+        <button
+          onClick={() => inputRef.current?.click()}
+          className="self-start sm:self-auto px-4 py-2 bg-[#0a6ed1] text-white text-[13px] font-semibold rounded-lg hover:bg-[#085caf] transition-all flex items-center gap-1.5"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          Upload Document
+        </button>
+        <input ref={inputRef} type="file" multiple accept=".pdf,.xls,.xlsx,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleFileChange} className="hidden" />
+      </div>
+
       {items.length === 0 ? (
-        <div onDragOver={e => e.preventDefault()} onDrop={handleDrop} className="py-14 sm:py-20 px-4 flex flex-col items-center text-center">
-          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5" className="mb-4"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
-          <h4 className="text-[16px] sm:text-[18px] font-semibold text-[#32363a] mb-1">No files added yet.</h4>
-          <p className="text-[13px] text-[#6a6d70]">Drop files here or click Add. They will be uploaded when you create the ASN.</p>
+        <div
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={handleDrop}
+          className="py-16 text-center border-2 border-dashed border-[#d1d5db] rounded-xl text-[#9ca3af] text-[13px]"
+        >
+          No {activeSub === 'general' ? 'general' : 'PDIR'} attachments added yet. Drop files here or click "Upload Document".
         </div>
       ) : (
-        <div className="divide-y divide-[#f0f0f0]" onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
-          {items.map(att => (
-            <div key={att.id} className="flex items-center justify-between gap-3 px-4 sm:px-6 py-4 hover:bg-[#fafbfc]">
+        <div
+          className="border border-[#e5e5e5] rounded-xl divide-y divide-[#f3f4f6] bg-white"
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={handleDrop}
+        >
+          {items.map((att) => (
+            <div key={att.id} className="flex items-center justify-between gap-3 px-4 py-3">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-lg bg-[#ebf5ff] flex items-center justify-center flex-shrink-0">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0a6ed1" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                <div className="w-8 h-8 rounded bg-[#ebf5ff] text-[#0a6ed1] flex items-center justify-center flex-shrink-0">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[14px] font-semibold text-[#32363a] truncate">{att.name}</div>
-                  <div className="text-[12px] text-[#6a6d70]">{(att.size / 1024).toFixed(1)} KB · Pending upload</div>
+                  <div className="text-[13px] sm:text-[14px] font-semibold text-[#1f2937] truncate">{att.name}</div>
+                  <div className="text-[11px] text-[#6b7280]">{(att.size / 1024).toFixed(1)} KB · Pending upload</div>
                 </div>
               </div>
-              <button onClick={() => onRemove(att.id)} className="w-8 h-8 flex items-center justify-center flex-shrink-0 text-[#cc1c14] hover:bg-[#fce8e6] rounded transition-colors" aria-label={`Remove ${att.name}`}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+              <button
+                onClick={() => onRemove(att.id, activeSub)}
+                className="text-[#dc2626] hover:bg-[#fee2e2] px-3 py-1 rounded text-[12px] font-medium flex-shrink-0"
+                aria-label={`Remove ${att.name}`}
+              >
+                Remove
               </button>
             </div>
           ))}
@@ -790,34 +531,39 @@ export default function CreateASN2({ agreement: propAgreement }) {
   const navigate = useNavigate()
   const location = useLocation()
   const agreement = location.state?.agreement || propAgreement || MOCK_FALLBACK_AGREEMENT
-  const isMobile = useIsMobile()
-  const [activeTab, setActiveTab] = useState('items')
-  const [attachmentsSubTab, setAttachmentsSubTab] = useState('general')
 
+  // Top circular tab: 'info' | 'attachments'
+  const [activeTab, setActiveTab] = useState('info')
+
+  // Invoice inputs
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [invoiceDate, setInvoiceDate] = useState('')
   const [invoiceAmount, setInvoiceAmount] = useState('')
   const [totalPacking, setTotalPacking] = useState('')
-  const [taxPopup, setTaxPopup] = useState(null)
 
+  // Filter bar
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [materialSearch, setMaterialSearch] = useState('')
 
+  // Data
   const [items, setItems] = useState([])
   const [itemsLoading, setItemsLoading] = useState(false)
   const [itemsError, setItemsError] = useState(null)
   const [selectedItemNos, setSelectedItemNos] = useState([])
   const [pdirOptions, setPdirOptions] = useState([])
   const [packagingTypes] = useState(PACKAGING_TYPES)
+  const [originalQties, setOriginalQties] = useState({})
 
+  // Attachments
   const [generalAttachments, setGeneralAttachments] = useState([])
   const [pdirAttachments, setPdirAttachments] = useState([])
 
+  // Modals / submission
+  const [taxPopup, setTaxPopup] = useState(null)
   const [splitBatchItem, setSplitBatchItem] = useState(null)
   const [modal, setModal] = useState(null)
   const [submitting, setSubmitting] = useState(false)
-  const [originalQties, setOriginalQties] = useState({})
 
   // Merge freshly fetched rows with what's already in state, keeping the user's edits
   const mergeFetched = (asnItems) => {
@@ -831,7 +577,7 @@ export default function CreateASN2({ agreement: propAgreement }) {
         return { ...freshItem, ...preserved }
       })
     })
-    // Remember the first-seen permissible qty per row (used to hide / disable zero-qty rows)
+    // Remember the first-seen permissible qty per row (used to hide zero-qty rows)
     setOriginalQties(prev => {
       const next = { ...prev }
       asnItems.forEach(i => {
@@ -861,16 +607,37 @@ export default function CreateASN2({ agreement: propAgreement }) {
     return () => { cancelled = true }
   }, [agreement?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const selectableItems = useMemo(() => items.filter(i => (originalQties[i.itemNo] ?? parseFloat(i.avlAsnQty || 0)) > 0), [items, originalQties])
-  const allSelected = selectableItems.length > 0 && selectedItemNos.length === selectableItems.length
-  const someSelected = selectedItemNos.length > 0 && !allSelected
+  // Rows shown in the table: zero-qty rows hidden, then material + shipment-date filters applied
+  const filteredItems = useMemo(() => {
+    const available = items.filter(i => (originalQties[i.itemNo] ?? parseFloat(i.avlAsnQty || 0)) > 0)
+    const fromIso = toIsoDate(fromDate)
+    const toIso = toIsoDate(toDate)
+    const q = materialSearch.trim().toUpperCase()
 
-  const toggleAll = () => { if (allSelected) setSelectedItemNos([]); else setSelectedItemNos(selectableItems.map(i => i.itemNo)) }
+    return available.filter(i => {
+      const matchMat = !q || i.materialNumber?.toUpperCase().includes(q) || i.materialName?.toUpperCase().includes(q)
+      const itemDateIso = toIsoDate(i.shipmentDate || i.deliveryDate)
+      const matchFrom = !fromIso || !itemDateIso || itemDateIso >= fromIso
+      const matchTo = !toIso || !itemDateIso || itemDateIso <= toIso
+      return matchMat && matchFrom && matchTo
+    })
+  }, [items, materialSearch, fromDate, toDate, originalQties])
+
+  const filteredSelectedCount = filteredItems.filter(i => selectedItemNos.includes(i.itemNo)).length
+  const allSelected = filteredItems.length > 0 && filteredSelectedCount === filteredItems.length
+  const someSelected = filteredSelectedCount > 0 && !allSelected
+
+  const toggleAll = () => {
+    const visibleNos = filteredItems.map(i => i.itemNo)
+    if (allSelected) setSelectedItemNos(prev => prev.filter(n => !visibleNos.includes(n)))
+    else setSelectedItemNos(prev => [...prev, ...visibleNos.filter(n => !prev.includes(n))])
+  }
   const toggleOne = (itemNo) => {
     const item = items.find(i => i.itemNo === itemNo)
-    if (!item || parseFloat(item.avlAsnQty || 0) === 0) return
-    if (selectedItemNos.includes(itemNo)) setSelectedItemNos(selectedItemNos.filter(n => n !== itemNo))
-    else setSelectedItemNos([...selectedItemNos, itemNo])
+    if (!item) return
+    if (selectedItemNos.includes(itemNo)) { setSelectedItemNos(prev => prev.filter(n => n !== itemNo)); return }
+    if (parseFloat(item.avlAsnQty || 0) === 0) return
+    setSelectedItemNos(prev => [...prev, itemNo])
   }
   const updateItem = (itemNo, field, value) => setItems(prev => prev.map(i => i.itemNo === itemNo ? { ...i, [field]: value } : i))
   const handleSplitBatchSave = (itemNo, batches) => setItems(prev => prev.map(i => i.itemNo === itemNo ? { ...i, batches } : i))
@@ -890,18 +657,23 @@ export default function CreateASN2({ agreement: propAgreement }) {
   }
   const handleClear = () => { setFromDate(''); setToDate(''); setMaterialSearch('') }
 
-  const calcInvoiceValue = () =>
-    items.filter(i => selectedItemNos.includes(i.itemNo))
-      .reduce((sum, i) => sum + (parseFloat(i.avlAsnQty || 0) * parseFloat(i.supplierNetPrice || i.netPrice || 0)), 0)
-      .toFixed(2)
+  // Selected rows for the summary card
+  const selectedItems = useMemo(
+    () => items.filter(i => selectedItemNos.includes(i.itemNo)),
+    [items, selectedItemNos]
+  )
 
+  // Invoice Value (Vendor) from the selected rows
   const invoiceValueVendor = useMemo(() => {
-    return calcInvoiceValue()
-  }, [items, selectedItemNos])
+    const sum = selectedItems.reduce(
+      (acc, it) => acc + parseFloat(it.avlAsnQty || 0) * parseFloat(it.supplierNetPrice || it.netPrice || 0),
+      0
+    )
+    return sum.toFixed(2)
+  }, [selectedItems])
 
   // Auto-populate invoice amount based on selected items + tax formula
   useEffect(() => {
-    const selectedItems = items.filter(i => selectedItemNos.includes(i.itemNo))
     if (selectedItems.length > 0) {
       const totalWithTax = selectedItems.reduce((acc, it) => {
         const q = parseFloat(it.avlAsnQty || 0)
@@ -919,7 +691,7 @@ export default function CreateASN2({ agreement: propAgreement }) {
     } else {
       setInvoiceAmount('')
     }
-  }, [items, selectedItemNos])
+  }, [selectedItems])
 
   const validateBeforeCreate = () => {
     const errors = []
@@ -927,25 +699,23 @@ export default function CreateASN2({ agreement: propAgreement }) {
     if (!invoiceNumber) errors.push('Invoice Number is required.')
     if (generalAttachments.length === 0) errors.push('At least one General Attachment is required.')
 
-    const selectedItems = items.filter(i => selectedItemNos.includes(i.itemNo))
     selectedItems.forEach(it => {
+      const tag = `Item ${it.ebelp} / Sch ${it.schLine} (${it.materialNumber})`
       const avl = parseFloat(it.avlAsnQty || 0)
-      if (avl === 0) { errors.push(`Item ${it.ebelp} / Sch ${it.schLine} (${it.materialNumber}): Available ASN Qty is 0.`); return }
+      if (avl === 0) { errors.push(`${tag}: Available ASN Qty is 0.`); return }
       const avlErr = getAvlAsnQtyError(it)
-      if (avlErr) errors.push(`Item ${it.ebelp} / Sch ${it.schLine} (${it.materialNumber}): ${avlErr}`)
+      if (avlErr) errors.push(`${tag}: ${avlErr}`)
       const fgVal = parseFloat(it.fgStock)
-      if (it.fgStock === '' || isNaN(fgVal)) errors.push(`Item ${it.ebelp} / Sch ${it.schLine} (${it.materialNumber}): FG Stock is required.`)
-      else if (fgVal < avl) errors.push(`Item ${it.ebelp} / Sch ${it.schLine} (${it.materialNumber}): FG Stock (${fgVal}) must be greater than or equal to Avl. ASN Qty (${avl}).`)
+      if (it.fgStock === '' || isNaN(fgVal)) errors.push(`${tag}: FG Stock is required.`)
+      else if (fgVal < avl) errors.push(`${tag}: FG Stock (${fgVal}) must be greater than or equal to Avl. ASN Qty (${avl}).`)
 
-      if (!it.packagingType) {
-        errors.push(`Item ${it.ebelp} / Sch ${it.schLine} (${it.materialNumber}): Type of Packaging is required.`)
-      }
+      if (!it.packagingType) errors.push(`${tag}: Type of Packaging is required.`)
       if (!it.packingMaterialQty || Number(it.packingMaterialQty) <= 0) {
-        errors.push(`Item ${it.ebelp} / Sch ${it.schLine} (${it.materialNumber}): Packing Material Qty must be greater than 0.`)
+        errors.push(`${tag}: Packing Material Qty must be greater than 0.`)
       }
       if (it.batches && it.batches.length > 0) {
         const sum = it.batches.reduce((s, b) => s + parseFloat(b.quantity || 0), 0)
-        if (Math.abs(sum - avl) > 0.0001) errors.push(`Item ${it.ebelp} / Sch ${it.schLine} (${it.materialNumber}): batch quantity sum (${sum}) does not match Permissible ASN Qty (${avl}).`)
+        if (Math.abs(sum - avl) > 0.0001) errors.push(`${tag}: batch quantity sum (${sum}) does not match Permissible ASN Qty (${avl}).`)
         const bad = it.batches.find(b => !b.batchCode || !b.quantity)
         if (bad) errors.push(`Item ${it.ebelp} / Sch ${it.schLine}: incomplete batch row.`)
       }
@@ -959,7 +729,6 @@ export default function CreateASN2({ agreement: propAgreement }) {
       setModal({ kind: 'error', title: 'Cannot create ASN', message: 'Please resolve the following issues and try again:', details: (<ul className="list-disc pl-5 space-y-1">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>), primaryLabel: 'OK', onPrimary: () => setModal(null) })
       return
     }
-    const selectedItems = items.filter(i => selectedItemNos.includes(i.itemNo))
     setModal({
       kind: 'confirm', title: 'Create ASN?', message: 'Please review the details below before submitting.',
       details: (
@@ -981,7 +750,6 @@ export default function CreateASN2({ agreement: propAgreement }) {
     setModal(null)
     setSubmitting(true)
     try {
-      const selectedItems = items.filter(i => selectedItemNos.includes(i.itemNo))
       const result = await createAsnApi.submitAsn({
         header: agreement,
         scheduleNo: agreement.id, plant: agreement.plant,
@@ -1043,27 +811,24 @@ export default function CreateASN2({ agreement: propAgreement }) {
 
   const totalAttachments = generalAttachments.length + pdirAttachments.length
 
-  const toIsoDate = (d) => {
-    if (!d) return null
-    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d
-    const dt = new Date(d)
-    return isNaN(dt.getTime()) ? null : dt.toISOString().slice(0, 10)
+  const handleAttachmentUpload = (att) => {
+    if (att.kind === 'general') setGeneralAttachments(prev => [...prev, att])
+    else setPdirAttachments(prev => [...prev, att])
+  }
+  const handleAttachmentRemove = (id, kind) => {
+    if (kind === 'general') setGeneralAttachments(prev => prev.filter(a => a.id !== id))
+    else setPdirAttachments(prev => prev.filter(a => a.id !== id))
+  }
+  const handleAttachmentReject = (msg) =>
+    setModal({ kind: 'error', title: 'Upload rejected', message: msg, primaryLabel: 'OK', onPrimary: () => setModal(null) })
+
+  const openTaxPopup = (item, e) => {
+    const r = e.currentTarget.getBoundingClientRect()
+    setTaxPopup(taxPopup?.item?.itemNo === item.itemNo ? null : { item, rect: r })
   }
 
-  const filteredItems = useMemo(() => {
-    const available = items.filter(i => (originalQties[i.itemNo] ?? parseFloat(i.avlAsnQty || 0)) > 0)
-    const fromIso = toIsoDate(fromDate)
-    const toIso = toIsoDate(toDate)
-    const q = materialSearch.trim().toUpperCase()
-
-    return available.filter(i => {
-      const matchMat = !q || i.materialNumber?.toUpperCase().includes(q) || i.materialName?.toUpperCase().includes(q)
-      const itemDateIso = toIsoDate(i.shipmentDate || i.deliveryDate)
-      const matchFrom = !fromIso || !itemDateIso || itemDateIso >= fromIso
-      const matchTo = !toIso || !itemDateIso || itemDateIso <= toIso
-      return matchMat && matchFrom && matchTo
-    })
-  }, [items, materialSearch, fromDate, toDate, originalQties])
+  const TABLE_COLS = 19
+  const cellInput = 'h-8 px-2 text-[13px] border rounded bg-white outline-none focus:border-[#0a6ed1]'
 
   return (
     <PageLayout
@@ -1074,20 +839,15 @@ export default function CreateASN2({ agreement: propAgreement }) {
     >
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes popIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
         .anim-fade { animation: fadeIn 0.35s ease-out both; }
-        .anim-slide-up { animation: slideUp 0.4s ease-out both; }
         .anim-pop { animation: popIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both; }
       `}</style>
 
-      <div className="bg-[#f5f6f7] min-h-[calc(100vh-104px)] anim-fade">
-        {/* Centres and caps the content on ultra-wide monitors */}
-        <div className="mx-auto w-full max-w-[1920px] bg-[#f5f6f7]">
-
-          {/* ─── HEADER STRIP ─── */}
-          <div className="bg-white border-b border-[#e5e5e5] px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
-            <button
+      <div className="bg-[#f5f6f7] min-h-[calc(100vh-104px)] flex flex-col">
+        {/* Top Header Strip with Back Button, Centered Title, and Action Button */}
+        <div className="relative flex flex-wrap items-center justify-between px-3 sm:px-6 py-2.5 border-b border-[#e5e7eb] bg-white gap-2">
+          <button
             type="button"
             onClick={() => navigate(-1)}
             className="w-8 h-8 rounded border-2 border-[#0a6ed1] text-[#0a6ed1] flex items-center justify-center hover:bg-[#ebf5ff] transition-all flex-shrink-0 cursor-pointer"
@@ -1104,275 +864,621 @@ export default function CreateASN2({ agreement: propAgreement }) {
               Create ASN
             </h1>
           </div>
-            <button onClick={handleCreate} disabled={submitting} className="flex items-center gap-2 px-5 h-10 text-[14px] font-semibold text-white bg-[#0a6ed1] rounded-lg hover:bg-[#085caf] hover:scale-[1.02] active:scale-[0.98] transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed">
-              {submitting ? <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Creating…</> : <><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>Create</>}
+
+          {/* Action button on right */}
+          <div className="flex items-center gap-2 z-10 ml-auto sm:ml-0">
+            <button
+              type="button"
+              onClick={handleCreate}
+              disabled={submitting}
+              className="flex items-center gap-1.5 px-3.5 h-8 bg-[#0a6ed1] text-white text-[12px] sm:text-[13px] font-bold rounded hover:bg-[#085caf] transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {submitting ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                <>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                    <polyline points="17 21 17 13 7 13 7 21" />
+                    <polyline points="7 3 7 8 15 8" />
+                  </svg>
+                  Save
+                </>
+              )}
             </button>
           </div>
+        </div>
 
-          {/* ─── AGREEMENT INFO ─── */}
-          <div className="bg-white border-b border-[#e5e5e5] px-4 sm:px-6 lg:px-8 py-4 sm:py-5 anim-slide-up">
-            <div className="text-[12px] uppercase tracking-wider text-[#6a6d70] font-semibold mb-1">Schedule Agreement</div>
-            <h2 className="text-[20px] sm:text-[24px] font-bold text-[#0a6ed1] tracking-tight">{agreement?.id}</h2>
-            <div className="text-[14px] text-[#6a6d70] mt-1">Plant: ({agreement?.plant})</div>
+        {/* Schedule Agreement & Plant Heading Section */}
+        <div className="px-3 sm:px-6 pt-3 sm:pt-4 pb-1 sm:pb-2">
+          <h2 className="text-[17px] sm:text-[19px] font-black text-[#0f2d59] tracking-tight">
+            Schedule Agreement : {agreement?.id}
+          </h2>
+          <div className="text-[12px] sm:text-[13px] text-[#4b5563] mt-0.5">
+            Plant : {agreement?.plant}
+          </div>
+        </div>
+
+        {/* TOP TWO-CARD SECTION (stack on mobile/tablet, 2-cols on laptop) */}
+        <div className="px-3 sm:px-6 py-2 grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
+          {/* Left Card: Invoice Inputs */}
+          <div className="bg-white border border-[#e5e7eb] rounded-xl p-4 sm:p-5 shadow-sm space-y-3">
+            <div>
+              <label className="block text-[12px] sm:text-[13px] font-semibold text-[#4b5563] mb-1">
+                Invoice Number: <span className="text-[#dc2626] font-bold">*</span>
+              </label>
+              <input
+                type="text"
+                value={invoiceNumber}
+                onChange={(e) => setInvoiceNumber(e.target.value)}
+                placeholder=""
+                className="w-full h-8 px-3 border border-[#d1d5db] rounded text-[13px] bg-white outline-none focus:border-[#0a6ed1] focus:ring-1 focus:ring-[#0a6ed1] transition-all"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[12px] sm:text-[13px] font-semibold text-[#4b5563] mb-1">
+                Invoice Date:
+              </label>
+              <div className="relative">
+                <input
+                  type="date"
+                  value={invoiceDate}
+                  onChange={(e) => setInvoiceDate(e.target.value)}
+                  className="w-full h-8 px-3 pr-8 border border-[#d1d5db] rounded text-[13px] bg-white outline-none focus:border-[#0a6ed1] focus:ring-1 focus:ring-[#0a6ed1] transition-all"
+                />
+                <div className="absolute right-2.5 top-2 text-[#9ca3af] pointer-events-none">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                    <line x1="16" y1="2" x2="16" y2="6" />
+                    <line x1="8" y1="2" x2="8" y2="6" />
+                    <line x1="3" y1="10" x2="21" y2="10" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[12px] sm:text-[13px] font-semibold text-[#4b5563] mb-1">
+                Invoice Amount: <span className="text-[#dc2626] font-bold">*</span>
+              </label>
+              <input
+                type="text"
+                value={invoiceAmount}
+                onChange={(e) => setInvoiceAmount(e.target.value)}
+                placeholder=""
+                className="w-full h-8 px-3 border border-[#d1d5db] rounded text-[13px] bg-white outline-none focus:border-[#0a6ed1] focus:ring-1 focus:ring-[#0a6ed1] transition-all"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[12px] sm:text-[13px] font-semibold text-[#4b5563] mb-1">
+                Invoice Value(Vendor):
+              </label>
+              <div className="w-full h-8 px-3 border border-dashed border-[#d1d5db] bg-[#f3f4f6] rounded text-[13px] flex items-center text-[#1f2937] font-semibold select-none">
+                {invoiceValueVendor}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[12px] sm:text-[13px] font-semibold text-[#4b5563] mb-1">
+                Total Packing:
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={totalPacking}
+                onChange={(e) => setTotalPacking(e.target.value)}
+                placeholder=""
+                className="w-full h-8 px-3 border border-[#d1d5db] rounded text-[13px] bg-white outline-none focus:border-[#0a6ed1] focus:ring-1 focus:ring-[#0a6ed1] transition-all"
+              />
+            </div>
           </div>
 
-          {/* ═══════════════════════════════════════════════════════
-              ALWAYS-VISIBLE: Invoice Details + Selected Materials
-          ═══════════════════════════════════════════════════════ */}
-          <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-6 grid grid-cols-12 gap-4 sm:gap-6 bg-[#f5f6f7]">
-            {/* Invoice Details */}
-            <div className="col-span-12 xl:col-span-4">
-              <div className="bg-white border border-[#e5e5e5] rounded-xl p-4 sm:p-6 shadow-sm">
-                <div className="flex items-center justify-between mb-5">
-                  <div>
-                    <h3 className="text-[16px] sm:text-[18px] font-bold text-[#32363a]">Invoice Details</h3>
-                    <p className="text-[13px] text-[#6a6d70] mt-0.5">Enter invoice information</p>
-                  </div>
-                  <div className="w-10 h-10 rounded-lg bg-[#0a6ed1]/10 flex items-center justify-center flex-shrink-0">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0a6ed1" strokeWidth="2"><path d="M4 4h16v16H4z" /><path d="M8 9h8M8 13h5" /></svg>
-                  </div>
+          {/* Right Card: Selected Line Items Summary Table (7 columns) */}
+          <div className="bg-white border border-[#e5e7eb] rounded-xl p-4 sm:p-5 shadow-sm flex flex-col min-w-0 overflow-hidden">
+            <div className="overflow-x-auto overflow-y-auto flex-1 w-full">
+              <table className="w-full text-left text-[12.5px] border-collapse" style={{ minWidth: 640 }}>
+                <thead>
+                  <tr className="border-b border-[#e5e7eb] text-[#1f2937] font-bold whitespace-nowrap bg-[#fafbfc]">
+                    <th className="py-2 px-2.5">Material</th>
+                    <th className="py-2 px-2.5">Description</th>
+                    <th className="py-2 px-2.5">Net Price</th>
+                    <th className="py-2 px-2.5">Qty Selected</th>
+                    <th className="py-2 px-2.5">SPQ</th>
+                    <th className="py-2 px-2.5 text-center">No.of EDI Tags</th>
+                    <th className="py-2 px-2.5 text-right">Value</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#f3f4f6]">
+                  {selectedItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-14 text-center text-[#6b7280]">
+                        No data
+                      </td>
+                    </tr>
+                  ) : (
+                    selectedItems.map((it) => {
+                      const qty = parseFloat(it.avlAsnQty || 0)
+                      const spqVal = parseFloat(it.spq) || 1
+                      const ediTags = Math.ceil(qty / spqVal) || 1
+                      const itemVal = (qty * parseFloat(it.supplierNetPrice || it.netPrice || 0)).toFixed(2)
+
+                      return (
+                        <tr key={it.itemNo} className="hover:bg-[#fafbfc] whitespace-nowrap">
+                          <td className="py-2 px-2.5 font-bold text-[#1f2937]">{it.materialNumber}</td>
+                          <td className="py-2 px-2.5 text-[#4b5563] max-w-[180px] truncate" title={it.materialName}>{it.materialName}</td>
+                          <td className="py-2 px-2.5 font-semibold text-[#0a6ed1]">{it.netPrice} INR</td>
+                          <td className="py-2 px-2.5 font-bold text-[#1f2937]">{it.avlAsnQty} {it.totalUnit}</td>
+                          <td className="py-2 px-2.5 text-[#1f2937] font-medium">{it.spq}</td>
+                          <td className="py-2 px-2.5 text-[#1f2937] font-medium text-center">{ediTags}</td>
+                          <td className="py-2 px-2.5 font-bold text-[#1f2937] text-right">{itemVal} INR</td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* Circular Tab Icons */}
+        <div className="px-3 sm:px-6 pt-3 flex items-center gap-4 sm:gap-6">
+          {/* Tab 1: Info (i) */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('info')}
+            title="ASN items"
+            className={`flex flex-col items-center pb-2 cursor-pointer transition-all border-b-2 ${
+              activeTab === 'info'
+                ? 'border-[#0a6ed1]'
+                : 'border-transparent text-[#6b7280] hover:text-[#0a6ed1]'
+            }`}
+          >
+            <div className="relative">
+              <div
+                className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-all shadow-sm ${
+                  activeTab === 'info'
+                    ? 'bg-[#0a6ed1] text-white'
+                    : 'bg-white border border-[#d1d5db] text-[#6b7280]'
+                }`}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="16" x2="12" y2="12" />
+                  <line x1="12" y1="8" x2="12.01" y2="8" />
+                </svg>
+              </div>
+              {selectedItemNos.length > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-[#0a6ed1] text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 border-2 border-white">
+                  {selectedItemNos.length}
+                </span>
+              )}
+            </div>
+          </button>
+
+          {/* Tab 2: Attachments */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('attachments')}
+            title="Attachments"
+            className={`flex flex-col items-center pb-2 cursor-pointer transition-all border-b-2 ${
+              activeTab === 'attachments'
+                ? 'border-[#0a6ed1]'
+                : 'border-transparent text-[#6b7280] hover:text-[#0a6ed1]'
+            }`}
+          >
+            <div className="relative">
+              <div
+                className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-all shadow-sm ${
+                  activeTab === 'attachments'
+                    ? 'bg-[#0a6ed1] text-white'
+                    : 'bg-white border border-[#d1d5db] text-[#6b7280]'
+                }`}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </div>
+              {totalAttachments > 0 ? (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-[#0a6ed1] text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 border-2 border-white">
+                  {totalAttachments}
+                </span>
+              ) : (
+                <span className="absolute -top-1.5 -right-1 text-[#cc1c14] text-[18px] font-bold leading-none" title="General attachment required">*</span>
+              )}
+            </div>
+          </button>
+        </div>
+
+        {/* TAB 1: ASN ITEMS TABLE */}
+        {activeTab === 'info' && (
+          <div className="flex-1 flex flex-col px-3 sm:px-6 pt-2 pb-6 min-h-0 min-w-0 anim-fade">
+            {/* Filter Bar */}
+            <div className="bg-white border border-[#e5e5e5] rounded-xl p-3 sm:px-5 sm:py-3 mb-4 shadow-sm flex flex-wrap items-end gap-3 sm:gap-4">
+              {/* Shipment From Date */}
+              <div className="w-full sm:w-auto">
+                <label className="block text-[12px] font-semibold text-[#1f2937] mb-1">Shipment From Date</label>
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={fromDate}
+                    onChange={(e) => setFromDate(e.target.value)}
+                    max={toDate || undefined}
+                    className="h-8 w-full sm:w-36 md:w-40 px-2.5 text-[13px] border border-[#d1d5db] rounded-lg bg-white outline-none focus:border-[#0a6ed1]"
+                  />
                 </div>
-                {/* 1 col on phones, 2 cols on tablets, back to 1 col inside the narrow xl sidebar column */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-4">
-                  <div>
-                    <label className="block text-[13px] font-semibold text-[#374151] mb-1.5">Invoice Number <span className="text-[#cc1c14]">*</span></label>
-                    <input type="text" value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} placeholder="Enter invoice number" className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-3 text-[14px] outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all" />
-                  </div>
-                  <div>
-                    <label className="block text-[13px] font-semibold text-[#374151] mb-1.5">Invoice Date</label>
-                    <input type="date" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value)} className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-3 text-[14px] outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all" />
-                  </div>
-                  <div>
-                    <label className="block text-[13px] font-semibold text-[#374151] mb-1.5">Invoice Amount <span className="text-[#dc2626] font-bold">*</span></label>
-                    <input
-                      type="text"
-                      value={invoiceAmount}
-                      onChange={e => setInvoiceAmount(e.target.value)}
-                      placeholder="0.00"
-                      className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-3 text-[14px] outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all font-semibold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[13px] font-semibold text-[#374151] mb-1.5">Invoice Value (Vendor)</label>
-                    <div className="h-10 rounded-lg border border-dashed border-[#cfd8e3] bg-[#f8fafc] flex items-center px-3 text-[#1f2937] text-[13px] font-semibold select-none">₹ {invoiceValueVendor}</div>
-                  </div>
-                  <div>
-                    <label className="block text-[13px] font-semibold text-[#374151] mb-1.5">Total Packing</label>
-                    <input type="text" inputMode="numeric" value={totalPacking} onChange={e => setTotalPacking(e.target.value)} placeholder="0" className="w-full h-10 rounded-lg border border-[#d9d9d9] bg-white px-3 text-[14px] outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all" />
+              </div>
+
+              {/* To Date */}
+              <div className="w-full sm:w-auto">
+                <label className="block text-[12px] font-semibold text-[#1f2937] mb-1">To Date</label>
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={toDate}
+                    onChange={(e) => setToDate(e.target.value)}
+                    min={fromDate || undefined}
+                    className="h-8 w-full sm:w-36 md:w-40 px-2.5 text-[13px] border border-[#d1d5db] rounded-lg bg-white outline-none focus:border-[#0a6ed1]"
+                  />
+                </div>
+              </div>
+
+              {/* Go Button */}
+              <button
+                type="button"
+                onClick={handleGo}
+                className="h-8 px-4 bg-[#0a6ed1] text-white text-[13px] font-semibold rounded-lg hover:bg-[#085caf] transition-all cursor-pointer"
+              >
+                Go
+              </button>
+
+              {/* Clear Button */}
+              <button
+                type="button"
+                onClick={handleClear}
+                className="h-8 px-4 bg-[#fde8e8] text-[#e02424] text-[13px] font-semibold rounded-lg hover:bg-[#fbd5d5] transition-all cursor-pointer"
+              >
+                Clear
+              </button>
+
+              {/* Enter Materials */}
+              <div className="w-full sm:w-auto sm:ml-auto">
+                <label className="block text-[12px] font-semibold text-[#1f2937] mb-1">Enter Materials</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={materialSearch}
+                    onChange={(e) => setMaterialSearch(e.target.value)}
+                    placeholder="Search"
+                    className="h-8 w-full sm:w-56 pl-3 pr-8 text-[13px] border border-[#d1d5db] rounded-lg bg-white outline-none focus:border-[#0a6ed1]"
+                  />
+                  <div className="absolute right-2.5 top-2 text-[#9ca3af] pointer-events-none">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="8" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Selected Materials */}
-            <div className="col-span-12 xl:col-span-8">
-              <div className="bg-white border border-[#e5e5e5] rounded-xl shadow-sm overflow-hidden h-full">
-                <div className="px-4 sm:px-6 py-4 border-b border-[#e5e5e5] flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 className="text-[16px] sm:text-[18px] font-bold text-[#32363a]">Selected Materials</h3>
-                    <p className="text-[13px] text-[#6a6d70] mt-0.5">{selectedItemNos.length} of {selectableItems.length} selectable items chosen</p>
-                  </div>
-                  <span className="px-3 py-1 bg-[#ebf5ff] text-[#0a6ed1] rounded-full text-[12px] font-semibold whitespace-nowrap">{selectedItemNos.length} selected</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-[13px] min-w-[760px]">
-                    <thead>
-                      <tr className="bg-[#fafbfc] border-b border-[#e5e5e5] text-[#6a6d70]">
-                        <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider whitespace-nowrap">Item / Sch</th>
-                        <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider">Material</th>
-                        <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider whitespace-nowrap">Net Price</th>
-                        <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider whitespace-nowrap">Permissible ASN Qty</th>
-                        <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider">SPQ</th>
-                        <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider">Batches</th>
-                        <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider">Value</th>
+            {itemsError && (
+              <div className="bg-[#fee2e2] border border-[#fca5a5] text-[#b91c1c] rounded-lg p-3 text-[13px] mb-4">
+                {itemsError}
+              </div>
+            )}
+
+            {/* Main Horizontal Scrollable Table */}
+            <div className="bg-white border border-[#e5e5e5] rounded-xl shadow-sm overflow-hidden flex-1 flex flex-col min-h-0 min-w-0">
+              <div className="overflow-x-auto overflow-y-auto flex-1 w-full">
+                <table className="w-full text-left text-[13px] border-collapse" style={{ minWidth: 2100 }}>
+                  <thead className="sticky top-0 bg-[#f9fafb] z-10 border-b border-[#e5e5e5]">
+                    <tr className="text-[#1f2937] font-bold whitespace-nowrap">
+                      <th className="py-3 px-3 w-10 text-center">
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          ref={(el) => { if (el) el.indeterminate = someSelected }}
+                          onChange={toggleAll}
+                          className="w-4 h-4 rounded accent-[#0a6ed1] cursor-pointer"
+                        />
+                      </th>
+                      <th className="py-3 px-3">Item No.</th>
+                      <th className="py-3 px-3">Schedule line</th>
+                      <th className="py-3 px-4">Material</th>
+                      <th className="py-3 px-4">Shipment Date</th>
+                      <th className="py-3 px-3">Total Qty</th>
+                      <th className="py-3 px-3">Conf.Qty</th>
+                      <th className="py-3 px-3">Delivered Qty</th>
+                      <th className="py-3 px-3">ASN Created</th>
+                      <th className="py-3 px-3">Permissible ASN Qty</th>
+                      <th className="py-3 px-3">FG Stock</th>
+                      <th className="py-3 px-3">Net Price</th>
+                      <th className="py-3 px-3">Supplier Net Price</th>
+                      <th className="py-3 px-3">Material Expiry</th>
+                      <th className="py-3 px-3">Tax Mismatch</th>
+                      <th className="py-3 px-4">Type of Packaging <span className="text-[#cc1c14]">*</span></th>
+                      <th className="py-3 px-3">Packing Qty <span className="text-[#cc1c14]">*</span></th>
+                      <th className="py-3 px-3">SPQ</th>
+                      <th className="py-3 px-4">PDIR No.</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f3f4f6]">
+                    {itemsLoading ? (
+                      <tr>
+                        <td colSpan={TABLE_COLS} className="py-20 text-center text-[#6b7280]">
+                          <div className="w-8 h-8 border-2 border-[#0a6ed1] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                          Loading ASN items…
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {selectedItemNos.length === 0 && (
-                        <tr><td colSpan={7} className="py-12 px-4 text-center text-[#6a6d70] text-[14px]">No materials selected. Pick items from the list below.</td></tr>
-                      )}
-                      {items.filter(i => selectedItemNos.includes(i.itemNo)).map(item => {
+                    ) : filteredItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={TABLE_COLS} className="py-16 text-center text-[#6b7280]">
+                          {items.length === 0
+                            ? 'No items available for ASN creation.'
+                            : 'No items match the current filters.'}
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredItems.map((item) => {
+                        const isSelected = selectedItemNos.includes(item.itemNo)
+                        const avlErr = getAvlAsnQtyError(item)
+                        const fgErr = getFgStockError(item)
+                        const maxBatches = parseInt(item.packingMaterialQty, 10)
+                        const splitDisabled = !item.packingMaterialQty || isNaN(maxBatches) || maxBatches < 1
                         const bc = item.batches?.length || 0
                         const bsum = (item.batches || []).reduce((s, b) => s + parseFloat(b.quantity || 0), 0)
                         const balanced = bc > 0 && Math.abs(bsum - parseFloat(item.avlAsnQty || 0)) < 0.0001
+
                         return (
-                          <tr key={item.itemNo} className="border-b border-[#f0f0f0] last:border-b-0 hover:bg-[#fafbfc]">
-                            <td className="py-3 px-4 font-semibold text-[#0a6ed1] whitespace-nowrap">{item.ebelp} / {item.schLine}</td>
-                            <td className="py-3 px-4"><div className="text-[#0a6ed1] font-semibold">{item.materialNumber}</div><div className="text-[#6a6d70] text-[12px]">{item.materialName}</div></td>
-                            <td className="py-3 px-4 text-[#32363a]">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  const r = e.currentTarget.getBoundingClientRect()
-                                  setTaxPopup(taxPopup?.item?.itemNo === item.itemNo ? null : { item, rect: r })
-                                }}
-                                className="text-[#0a6ed1] font-semibold hover:underline cursor-pointer"
+                          <tr
+                            key={item.itemNo}
+                            className={`hover:bg-[#f9fafb] transition-colors whitespace-nowrap ${
+                              isSelected ? 'bg-[#f0f7ff]/50' : ''
+                            }`}
+                          >
+                            {/* Checkbox */}
+                            <td className="py-3 px-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleOne(item.itemNo)}
+                                className="w-4 h-4 rounded accent-[#0a6ed1] cursor-pointer"
+                              />
+                            </td>
+
+                            {/* Item No. */}
+                            <td className="py-3 px-3 font-semibold text-[#1f2937]">{item.ebelp}</td>
+
+                            {/* Schedule line */}
+                            <td className="py-3 px-3 text-[#1f2937] font-semibold">{item.schLine}</td>
+
+                            {/* Material */}
+                            <td className="py-3 px-4">
+                              <div className="font-bold text-[#1f2937] leading-tight">{item.materialNumber}</div>
+                              <div className="text-[12px] text-[#4b5563] leading-tight mt-0.5">{item.materialName}</div>
+                            </td>
+
+                            {/* Shipment Date */}
+                            <td className="py-3 px-4 text-[#1f2937] font-medium">{item.shipmentDate || '—'}</td>
+
+                            {/* Total Qty */}
+                            <td className="py-3 px-3 text-[#1f2937]">
+                              <span className="font-bold text-[#0a6ed1]">{item.totalQty}</span>{' '}
+                              <span className="text-[#4b5563] text-[12px]">{item.totalUnit}</span>
+                            </td>
+
+                            {/* Conf. Qty */}
+                            <td className="py-3 px-3 text-[#1f2937]">
+                              <span className="font-bold">{item.confQty}</span>{' '}
+                              <span className="text-[#4b5563] text-[12px]">{item.confUnit}</span>
+                            </td>
+
+                            {/* Delivered Qty */}
+                            <td className="py-3 px-3 text-[#1f2937]">
+                              <span className="font-bold">{item.deliveredQty}</span>{' '}
+                              <span className="text-[#4b5563] text-[12px]">{item.deliveredUnit}</span>
+                            </td>
+
+                            {/* ASN Created */}
+                            <td className="py-3 px-3 text-[#1f2937] font-bold">{item.asnCreated}</td>
+
+                            {/* Permissible ASN Qty (editable) */}
+                            <td className="py-3 px-3">
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={item.avlAsnQty}
+                                  onChange={(e) => updateItem(item.itemNo, 'avlAsnQty', e.target.value)}
+                                  className={`w-20 ${cellInput} text-center font-semibold text-[#0a6ed1] ${
+                                    avlErr ? 'border-[#dc2626] bg-[#fef2f2] focus:border-[#dc2626]' : 'border-[#d1d5db]'
+                                  }`}
+                                />
+                                <span className="text-[#4b5563] font-medium text-[12px]">{item.totalUnit}</span>
+                              </div>
+                              {avlErr && (
+                                <div className="text-[11px] text-[#dc2626] font-medium mt-1">{avlErr}</div>
+                              )}
+                            </td>
+
+                            {/* FG Stock (editable) */}
+                            <td className="py-3 px-3">
+                              <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={item.fgStock}
+                                onChange={(e) => updateItem(item.itemNo, 'fgStock', e.target.value)}
+                                onWheel={(e) => e.target.blur()}
+                                placeholder="0"
+                                className={`w-24 ${cellInput} ${
+                                  fgErr ? 'border-[#dc2626] bg-[#fef2f2] focus:border-[#dc2626]' : 'border-[#d1d5db]'
+                                }`}
+                              />
+                              {fgErr && (
+                                <div className="text-[11px] text-[#dc2626] font-medium mt-1">{fgErr}</div>
+                              )}
+                            </td>
+
+                            {/* Net Price (blue text, clickable for Tax Breakdown) */}
+                            <td className="py-3 px-3">
+                              <span
+                                onClick={(e) => openTaxPopup(item, e)}
+                                className="text-[#0a6ed1] font-semibold cursor-pointer hover:underline"
                                 title="Click to view tax breakdown"
                               >
                                 {item.netPrice} INR
-                              </button>
+                              </span>
                             </td>
-                            <td className="py-3 px-4 text-[#32363a] whitespace-nowrap">{item.avlAsnQty} {item.totalUnit}</td>
-                            <td className="py-3 px-4 text-[#32363a]">{item.spq}</td>
+
+                            {/* Supplier Net Price (editable) */}
+                            <td className="py-3 px-3">
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={item.supplierNetPrice}
+                                onChange={(e) => updateItem(item.itemNo, 'supplierNetPrice', e.target.value)}
+                                className={`w-24 ${cellInput} border-[#d1d5db] text-left`}
+                              />
+                            </td>
+
+                            {/* Material Expiry */}
+                            <td className="py-3 px-3">
+                              <input
+                                type="date"
+                                value={item.materialExpiry}
+                                onChange={(e) => updateItem(item.itemNo, 'materialExpiry', e.target.value)}
+                                className={`w-36 ${cellInput} border-[#d1d5db]`}
+                              />
+                            </td>
+
+                            {/* Tax Mismatch (switch) */}
+                            <td className="py-3 px-3">
+                              <TaxMismatchSwitch
+                                value={item.taxMismatch}
+                                onChange={(val) => updateItem(item.itemNo, 'taxMismatch', val)}
+                              />
+                            </td>
+
+                            {/* Type of Packaging */}
                             <td className="py-3 px-4">
-                              {bc === 0 ? <span className="text-[12px] text-[#9ca3af]">—</span> : (
-                                <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold whitespace-nowrap ${balanced ? 'bg-[#e8f5ec] text-[#107e3e]' : 'bg-[#fef7e6] text-[#b45309]'}`}>
-                                  {bc} {item.packingMaterialType}{bc > 1 && item.packingMaterialType ? 's' : ''} · {balanced ? 'balanced' : 'unbalanced'}
-                                </span>
+                              <select
+                                value={item.packagingType}
+                                onChange={(e) => updateItem(item.itemNo, 'packagingType', e.target.value)}
+                                className={`${cellInput} border-[#d1d5db] min-w-[170px]`}
+                              >
+                                <option value="">Select</option>
+                                {packagingTypes.map((pt) => (
+                                  <option key={pt} value={pt}>{pt}</option>
+                                ))}
+                              </select>
+                            </td>
+
+                            {/* Packing Qty + Split */}
+                            <td className="py-3 px-3">
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={item.packingMaterialQty}
+                                  onChange={(e) => updateItem(item.itemNo, 'packingMaterialQty', e.target.value.replace(/^0+/, ''))}
+                                  placeholder="0"
+                                  className={`w-14 ${cellInput} border-[#d1d5db] text-center`}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => !splitDisabled && setSplitBatchItem(item)}
+                                  disabled={splitDisabled}
+                                  title={splitDisabled ? 'Enter Packing Qty to enable split' : 'Split Quantity'}
+                                  className={`text-[12px] font-semibold ${
+                                    splitDisabled
+                                      ? 'text-[#9ca3af] cursor-not-allowed'
+                                      : bc > 0
+                                        ? balanced
+                                          ? 'text-[#107e3e] hover:underline cursor-pointer'
+                                          : 'text-[#b45309] hover:underline cursor-pointer'
+                                        : 'text-[#0a6ed1] hover:underline cursor-pointer'
+                                  }`}
+                                >
+                                  Split{bc > 0 ? ` (${bc}/${maxBatches || '?'})` : ''}
+                                </button>
+                              </div>
+                              {!splitDisabled && bc > 0 && (
+                                <div className={`text-[11px] font-semibold mt-1 ${balanced ? 'text-[#107e3e]' : 'text-[#b45309]'}`}>
+                                  {balanced ? `✓ ${batchLabel(item, bc)} — balanced` : `⚠ ${batchLabel(item, bc)} — unbalanced`}
+                                </div>
                               )}
                             </td>
-                            <td className="py-3 px-4 text-[#32363a] font-semibold">{(parseFloat(item.avlAsnQty || 0) * parseFloat(item.supplierNetPrice || item.netPrice || 0)).toFixed(2)}</td>
+
+                            {/* SPQ */}
+                            <td className="py-3 px-3 text-[#1f2937] font-medium">{item.spq}</td>
+
+                            {/* PDIR No. */}
+                            <td className="py-3 px-4">
+                              <select
+                                value={item.pdirNo}
+                                onChange={(e) => updateItem(item.itemNo, 'pdirNo', e.target.value)}
+                                className={`${cellInput} border-[#d1d5db] min-w-[120px]`}
+                              >
+                                <option value="">Select</option>
+                                {(pdirOptions || []).map((p) => (
+                                  <option key={p} value={p}>{p}</option>
+                                ))}
+                              </select>
+                            </td>
                           </tr>
                         )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                      })
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
+        )}
 
-          {/* ═══════════════════════════════════════════════════════
-              TAB BAR
-          ═══════════════════════════════════════════════════════ */}
-          <div className="bg-white border-t border-b border-[#e5e5e5] px-4 sm:px-6 lg:px-8 pt-4 overflow-x-auto">
-            <div className="flex items-center gap-1 min-w-max">
-              <button
-                onClick={() => setActiveTab('items')}
-                className={`relative flex items-center gap-2 px-4 sm:px-5 h-11 text-[14px] font-semibold rounded-t-lg transition-all -mb-px border-b-2 whitespace-nowrap ${activeTab === 'items' ? 'text-[#0a6ed1] bg-[#ebf5ff] border-[#0a6ed1]' : 'text-[#6a6d70] bg-transparent border-transparent hover:text-[#0a6ed1] hover:bg-[#f5f9ff]'}`}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <path d="M14 2v6h6" />
-                  <path d="M12 11v6M9 14h6" />
-                </svg>
-                Create ASN
-                {selectedItemNos.length > 0 && (
-                  <span className="ml-0.5 min-w-[18px] h-[18px] bg-[#0a6ed1] text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">{selectedItemNos.length}</span>
-                )}
-              </button>
-              <button
-                onClick={() => setActiveTab('attachments')}
-                className={`relative flex items-center gap-2 px-4 sm:px-5 h-11 text-[14px] font-semibold rounded-t-lg transition-all -mb-px border-b-2 whitespace-nowrap ${activeTab === 'attachments' ? 'text-[#0a6ed1] bg-[#ebf5ff] border-[#0a6ed1]' : 'text-[#6a6d70] bg-transparent border-transparent hover:text-[#0a6ed1] hover:bg-[#f5f9ff]'}`}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.49" />
-                </svg>
-                Attachments
-                {generalAttachments.length === 0 && <span className="text-[#cc1c14] text-[16px] font-bold leading-none -mt-1">*</span>}
-                {totalAttachments > 0 && <span className="ml-0.5 min-w-[18px] h-[18px] bg-[#0a6ed1] text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">{totalAttachments}</span>}
-              </button>
-            </div>
+        {/* TAB 2: ATTACHMENTS */}
+        {activeTab === 'attachments' && (
+          <div className="flex-1 bg-white p-3 sm:p-6 min-h-0 min-w-0 anim-fade">
+            <AttachmentsPanel
+              generalAttachments={generalAttachments}
+              pdirAttachments={pdirAttachments}
+              onUpload={handleAttachmentUpload}
+              onRemove={handleAttachmentRemove}
+              onReject={handleAttachmentReject}
+            />
           </div>
-
-          {/* ═══════════════════════════════════════════════════════
-              TAB CONTENT
-          ═══════════════════════════════════════════════════════ */}
-          {activeTab === 'items' ? (
-            <div className="anim-fade">
-              {/* Filter row */}
-              <div className="px-4 sm:px-6 lg:px-8 py-5 bg-white border-b border-[#e5e5e5] grid grid-cols-2 md:grid-cols-12 gap-4 items-end">
-                <div className="col-span-1 md:col-span-3 xl:col-span-2">
-                  <label className="block text-[12px] text-[#6a6d70] mb-1.5 font-semibold">Shipment From Date</label>
-                  <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} max={toDate || undefined} className="w-full h-10 pl-3 pr-2 text-[14px] border border-[#d9d9d9] rounded-lg bg-white focus:outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all" />
-                </div>
-                <div className="col-span-1 md:col-span-3 xl:col-span-2">
-                  <label className="block text-[12px] text-[#6a6d70] mb-1.5 font-semibold">To Date</label>
-                  <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} min={fromDate || undefined} className="w-full h-10 pl-3 pr-2 text-[14px] border border-[#d9d9d9] rounded-lg bg-white focus:outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all" />
-                </div>
-                <div className="col-span-1 md:col-span-2 xl:col-span-1">
-                  <button onClick={handleGo} className="h-10 px-4 text-[14px] font-semibold text-white bg-[#0a6ed1] rounded-lg hover:bg-[#085caf] hover:scale-[1.02] active:scale-[0.98] transition-all shadow-sm w-full">Go</button>
-                </div>
-                <div className="col-span-1 md:col-span-2 xl:col-span-1">
-                  <button onClick={handleClear} className="h-10 px-4 text-[14px] font-semibold text-[#cc1c14] bg-[#fce8e6] border border-[#fce8e6] rounded-lg hover:bg-[#fad6d3] transition-all w-full">Clear</button>
-                </div>
-                <div className="col-span-2 md:col-span-12 xl:col-span-3">
-                  <label className="block text-[12px] text-[#6a6d70] mb-1.5 font-semibold">Enter Materials</label>
-                  <div className="relative">
-                    <input type="text" value={materialSearch} onChange={e => setMaterialSearch(e.target.value)} placeholder="Search materials" className="w-full h-10 pl-3 pr-10 text-[14px] border border-[#d9d9d9] rounded-lg bg-white focus:outline-none focus:border-[#0a6ed1] focus:ring-2 focus:ring-[#0a6ed1]/20 transition-all" />
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute right-3 top-3 text-[#6a6d70]"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-                  </div>
-                </div>
-              </div>
-
-              {/* Items list */}
-              <div className="px-4 sm:px-6 lg:px-8 pb-8 bg-white">
-                {itemsError && (
-                  <div className="mt-4 flex items-center gap-2 px-4 py-3 bg-[#fce8e6] text-[#cc1c14] rounded-lg text-[13px]">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-                    {itemsError}
-                  </div>
-                )}
-                {itemsLoading && (
-                  <div className="flex items-center justify-center py-12 gap-2 text-[#6a6d70] text-[13px]">
-                    <div className="w-5 h-5 border-2 border-[#e5e5e5] border-t-[#0a6ed1] rounded-full animate-spin"/>
-                    Loading items…
-                  </div>
-                )}
-                {!itemsLoading && isMobile ? (
-                  <div className="pt-2">
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-[14px] font-bold text-[#32363a]">Items ({filteredItems.length})</span>
-                      <label className="flex items-center gap-2 text-[13px] font-semibold text-[#0a6ed1] cursor-pointer">
-                        <input type="checkbox" checked={allSelected} ref={el => { if (el) el.indeterminate = someSelected }} onChange={toggleAll} className="accent-[#0a6ed1] w-4 h-4" />
-                        Select All
-                      </label>
-                    </div>
-                    {filteredItems.length === 0 && <div className="py-12 text-center text-[#6a6d70] text-[14px]">No items available</div>}
-                    {filteredItems.map(item => (
-                      <MobileItemCard key={item.itemNo} item={item} isSelected={selectedItemNos.includes(item.itemNo)} onToggle={() => toggleOne(item.itemNo)} onUpdate={(field, val) => updateItem(item.itemNo, field, val)} onSplitBatch={(it) => setSplitBatchItem(it)} onTaxPopup={setTaxPopup} packagingTypes={packagingTypes} pdirOptions={pdirOptions} originalQty={originalQties[item.itemNo] ?? parseFloat(item.avlAsnQty || 0)} />
-                    ))}
-                  </div>
-                ) : !itemsLoading && (
-                  <div className="pt-4">
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                          <input type="checkbox" checked={allSelected} ref={el => { if (el) el.indeterminate = someSelected }} onChange={toggleAll} className="accent-[#0a6ed1] w-4 h-4" />
-                          <span className="text-[13px] font-semibold text-[#374151]">Select All</span>
-                        </label>
-                        <span className="text-[13px] text-[#6a6d70]">{filteredItems.length} item{filteredItems.length !== 1 ? 's' : ''}</span>
-                      </div>
-                      {selectedItemNos.length > 0 && <span className="px-3 py-1 bg-[#ebf5ff] text-[#0a6ed1] rounded-full text-[12px] font-semibold">{selectedItemNos.length} selected</span>}
-                    </div>
-                    {filteredItems.length === 0 && <div className="py-16 text-center text-[#6a6d70] text-[14px] border border-dashed border-[#d9d9d9] rounded-xl">No items available. Adjust filters and click Go.</div>}
-                    {filteredItems.map(item => (
-                      <DesktopItemCard key={item.itemNo} item={item} isSelected={selectedItemNos.includes(item.itemNo)} onToggle={() => toggleOne(item.itemNo)} onUpdate={(field, val) => updateItem(item.itemNo, field, val)} onSplitBatch={(it) => setSplitBatchItem(it)} onTaxPopup={setTaxPopup} packagingTypes={packagingTypes} pdirOptions={pdirOptions} originalQty={originalQties[item.itemNo] ?? parseFloat(item.avlAsnQty || 0)} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            /* ─── ATTACHMENTS TAB ─── */
-            <div className="anim-fade px-4 sm:px-6 lg:px-8 py-6">
-              <div className="flex items-center gap-2 mb-4 border-b border-[#e5e5e5] overflow-x-auto">
-                <button onClick={() => setAttachmentsSubTab('general')} className={`relative flex items-center gap-1 px-4 sm:px-5 h-11 text-[14px] font-semibold rounded-t-lg transition-all -mb-px border-b-2 whitespace-nowrap ${attachmentsSubTab === 'general' ? 'text-[#0a6ed1] bg-[#ebf5ff] border-[#0a6ed1]' : 'text-[#6a6d70] bg-transparent border-transparent hover:text-[#0a6ed1]'}`}>
-                  General Attachments
-                  {generalAttachments.length === 0 && <span className="text-[#cc1c14] text-[16px] font-bold leading-none -mt-1">*</span>}
-                  {generalAttachments.length > 0 && <span className="ml-1 px-1.5 py-0.5 bg-[#0a6ed1] text-white rounded-full text-[10px] font-bold">{generalAttachments.length}</span>}
-                </button>
-                <button onClick={() => setAttachmentsSubTab('pdir')} className={`relative px-4 sm:px-5 h-11 text-[14px] font-semibold rounded-t-lg transition-all -mb-px border-b-2 whitespace-nowrap ${attachmentsSubTab === 'pdir' ? 'text-[#0a6ed1] bg-[#ebf5ff] border-[#0a6ed1]' : 'text-[#6a6d70] bg-transparent border-transparent hover:text-[#0a6ed1]'}`}>
-                  PDIR Attachment
-                  {pdirAttachments.length > 0 && <span className="ml-2 px-1.5 py-0.5 bg-[#107e3e] text-white rounded-full text-[10px] font-bold">{pdirAttachments.length}</span>}
-                </button>
-              </div>
-              {attachmentsSubTab === 'general' ? (
-                <AttachmentsPanel kind="general" items={generalAttachments}
-                  onUpload={(att, errMsg) => { if (errMsg) { setModal({ kind: 'error', title: 'Upload rejected', message: errMsg, primaryLabel: 'OK', onPrimary: () => setModal(null) }); return } setGeneralAttachments(prev => [...prev, att]) }}
-                  onRemove={(id) => setGeneralAttachments(prev => prev.filter(a => a.id !== id))} />
-              ) : (
-                <AttachmentsPanel kind="pdir" items={pdirAttachments}
-                  onUpload={(att, errMsg) => { if (errMsg) { setModal({ kind: 'error', title: 'Upload rejected', message: errMsg, primaryLabel: 'OK', onPrimary: () => setModal(null) }); return } setPdirAttachments(prev => [...prev, att]) }}
-                  onRemove={(id) => setPdirAttachments(prev => prev.filter(a => a.id !== id))} />
-              )}
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
-      <SplitBatchModal open={!!splitBatchItem} item={splitBatchItem} onClose={() => setSplitBatchItem(null)} onSave={handleSplitBatchSave} />
-      <ConfirmationModal open={!!modal} kind={modal?.kind} title={modal?.title} message={modal?.message} details={modal?.details} primaryLabel={modal?.primaryLabel} secondaryLabel={modal?.secondaryLabel} onPrimary={modal?.onPrimary} onSecondary={modal?.onSecondary} />
+      {/* Split Batch Modal */}
+      <SplitBatchModal
+        open={!!splitBatchItem}
+        item={splitBatchItem}
+        onClose={() => setSplitBatchItem(null)}
+        onSave={handleSplitBatchSave}
+      />
+
+      {/* Confirmation / Result Modal */}
+      <ConfirmationModal
+        open={!!modal}
+        kind={modal?.kind}
+        title={modal?.title}
+        message={modal?.message}
+        details={modal?.details}
+        primaryLabel={modal?.primaryLabel}
+        secondaryLabel={modal?.secondaryLabel}
+        onPrimary={modal?.onPrimary}
+        onSecondary={modal?.onSecondary}
+      />
+
+      {/* Portal-based Tax Breakdown Popup */}
       {taxPopup && (
         <TaxBreakdownPopup
           item={taxPopup.item}

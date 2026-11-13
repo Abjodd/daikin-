@@ -804,6 +804,7 @@ function mapPdirRef(raw) {
     refDate: raw.Shipmentdate ? sapDateToDisplay(raw.Shipmentdate) : sapDateToDisplay(raw.Pdir_Ref_Date),
   }
 }
+const ASN_CREATE_URL = '/sap/bc/http/sap/ZHTTP_ASN_CREATE'
 
 export const purchaseOrderApi = {
   async fetchAllSuppliers() {
@@ -1209,6 +1210,7 @@ export const purchaseOrderApi = {
    * Errors are thrown instead of being reported as a simulated success.
    * A duplicate-key error (already confirmed in the backend) is skipped.
    */
+  
   async submitConfirm(poNo, selectedRows, vendorNo = '') {
     if (USE_MOCK) {
       await new Promise(r => setTimeout(r, 400))
@@ -1244,22 +1246,44 @@ export const purchaseOrderApi = {
       if (seen.has(dedupeKey)) continue
       seen.add(dedupeKey)
 
+      // const payload = {
+      //   Purchaseorder: poNo,
+      //   Purchaseorderitem: toItem4(row.itemNo),
+      //   Vendor: str(vendorNo || row.vendorNo),
+      //   Material: str(row.materialNo),
+      //   Status: CONFIRM_STATUS,
+      // }
+      const CONFIRM_TYPE = 'AB'
+
       const payload = {
         Purchaseorder: poNo,
         Purchaseorderitem: toItem4(row.itemNo),
         Vendor: str(vendorNo || row.vendorNo),
         Material: str(row.materialNo),
+        Type: str(row.confirmType || CONFIRM_TYPE),
         Status: CONFIRM_STATUS,
       }
+
+
       // Adjust the padding/format to whatever the backend field expects
       if (CONFIRM_SCHEDULE_FIELD) payload[CONFIRM_SCHEDULE_FIELD] = sched
 
-      const res = await fetch(`${BASE}/ZP_PO_CONFIRM`, {
+      // const res = await fetch(`${BASE}/ZP_PO_CONFIRM`, {
+      //   method: 'POST',
+      //   headers: {
+      //     'Content-Type': 'application/json',
+      //     Accept: 'application/json',
+      //     'X-CSRF-Token': token,
+      //   },
+      //   credentials: 'include',
+      //   body: JSON.stringify(payload),
+      // })
+        const res = await fetch(ASN_CREATE_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          'X-CSRF-Token': token,
+          // 'X-CSRF-Token': csrfToken,
         },
         credentials: 'include',
         body: JSON.stringify(payload),

@@ -49,11 +49,15 @@ function mapHeader(h, plant = '') {
 }
 
 function mapItem(it, lines, confirmedItems) {
+  const isConfirmed = confirmedItems.has(parseInt(it.SchedulingAgreementItem, 10))
   const mine = lines.filter((l) => sameItem(l.SchedulingAgreementItem, it.SchedulingAgreementItem))
   const total = mine.reduce((s, l) => s + num(l.ScheduleLineOrderQuantity), 0)
   const delivered = mine.reduce((s, l) => s + num(l.RoughGoodsReceiptQty), 0)
   const uom = str(it.OrderQuantityUnit)
-  const isConfirmed = confirmedItems.has(parseInt(it.SchedulingAgreementItem, 10))
+  const mappedLines = mine.map((l) => mapScheduleLine(l, isConfirmed))
+  const firstRaw = mappedLines[0]?.deliveryDateRaw || ''
+  const firstIso = firstRaw && firstRaw.length === 8 ? `${firstRaw.slice(0, 4)}-${firstRaw.slice(4, 6)}-${firstRaw.slice(6, 8)}` : ''
+
   return {
     itemNo: str(it.SchedulingAgreementItem),
     scheduleItem: str(it.SchedulingAgreementItem),
@@ -69,7 +73,10 @@ function mapItem(it, lines, confirmedItems) {
     unitPrice: String(num(it.NetPriceAmount)),
     currency: str(it.DocumentCurrency),
     status: isConfirmed ? CONFIRMED : NOT_CONFIRMED,
-    scheduleLines: [],
+    deliveryDate: mappedLines[0]?.deliveryDate || '',
+    deliveryDateRaw: firstRaw,
+    deliveryDateIso: firstIso,
+    scheduleLines: mappedLines,
   }
 }
 
@@ -107,6 +114,7 @@ function mapConfirmRow(agreementId, it, l, vendorNo, isConfirmed) {
     scheduleNo: agreementId,
     vendorNo, // needed as key for ZP_SCH_AGREEMENT
     confkey: isConfirmed ? 'X' : '',
+    alreadyConfirmed: isConfirmed,
   }
 }
 
@@ -200,8 +208,20 @@ const liveApi = {
       })
       .filter(Boolean)
 
-    if (fromDate) rows = rows.filter((r) => r.deliveryDateRaw >= isoToSap8(fromDate))
-    if (toDate) rows = rows.filter((r) => r.deliveryDateRaw <= isoToSap8(toDate))
+    const normalizeDateStr = (d) => {
+      if (!d) return ''
+      const s = String(d).replace(/[-.]/g, '')
+      return s.length >= 8 ? s.slice(0, 8) : s
+    }
+
+    if (fromDate) {
+      const fNorm = normalizeDateStr(fromDate)
+      rows = rows.filter((r) => normalizeDateStr(r.deliveryDateRaw) >= fNorm)
+    }
+    if (toDate) {
+      const tNorm = normalizeDateStr(toDate)
+      rows = rows.filter((r) => normalizeDateStr(r.deliveryDateRaw) <= tNorm)
+    }
     if (storageLocation.trim()) rows = rows.filter((r) => r.storageLocation === storageLocation.trim())
     return rows
   },

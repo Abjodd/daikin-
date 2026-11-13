@@ -30,6 +30,10 @@ function mapHeader(a) {
 function mapItem(it) {
   const total = it.lines.reduce((s, l) => s + l.qty, 0)
   const delivered = it.lines.reduce((s, l) => s + l.asnCreated, 0)
+  const mappedLines = (it.lines || []).map((l) => mapScheduleLine(l, it.uom))
+  const firstRaw = it.lines[0]?.date || ''
+  const firstIso = firstRaw && firstRaw.length === 8 ? `${firstRaw.slice(0, 4)}-${firstRaw.slice(4, 6)}-${firstRaw.slice(6, 8)}` : ''
+
   return {
     itemNo: it.itemNo,
     scheduleItem: it.itemNo,
@@ -43,7 +47,10 @@ function mapItem(it) {
     deliveredUnit: it.uom,
     unitPrice: String(it.unitPrice),
     status: statusOf(it),
-    scheduleLines: [],
+    deliveryDate: mappedLines[0]?.deliveryDate || '',
+    deliveryDateRaw: firstRaw,
+    deliveryDateIso: firstIso,
+    scheduleLines: mappedLines,
   }
 }
 
@@ -51,6 +58,7 @@ function mapScheduleLine(l, uom) {
   return {
     schLineNo: l.schLineNo,
     deliveryDate: sapDateDisplay(l.date),
+    deliveryDateRaw: l.date,
     deliverySchedule: l.qty,
     confirmedQty: l.confirmedQty,
     unit: uom,
@@ -59,6 +67,7 @@ function mapScheduleLine(l, uom) {
 }
 
 function mapConfirmRow(a, it, l) {
+  const isDone = l.confkey === 'X' || (l.confirmedQty > 0)
   return {
     itemNo: it.itemNo,
     scheduleLine: l.schLineNo,
@@ -73,6 +82,8 @@ function mapConfirmRow(a, it, l) {
     dispatchDate: sapDateDisplay(l.date),
     uom: it.uom,
     scheduleNo: a.id,
+    confkey: l.confkey || '',
+    alreadyConfirmed: isDone,
   }
 }
 
@@ -124,8 +135,19 @@ export const mockScheduleReleaseApi = {
     const a = findAgreement(scheduleNo)
     if (!a) return []
     let rows = a.items.flatMap((it) => it.lines.map((l) => mapConfirmRow(a, it, l)))
-    if (fromDate) rows = rows.filter((r) => r.deliveryDateRaw >= isoToSap8(fromDate))
-    if (toDate)   rows = rows.filter((r) => r.deliveryDateRaw <= isoToSap8(toDate))
+    const normalizeDateStr = (d) => {
+      if (!d) return ''
+      const s = String(d).replace(/[-.]/g, '')
+      return s.length >= 8 ? s.slice(0, 8) : s
+    }
+    if (fromDate) {
+      const fNorm = normalizeDateStr(fromDate)
+      rows = rows.filter((r) => normalizeDateStr(r.deliveryDateRaw) >= fNorm)
+    }
+    if (toDate) {
+      const tNorm = normalizeDateStr(toDate)
+      rows = rows.filter((r) => normalizeDateStr(r.deliveryDateRaw) <= tNorm)
+    }
     if (storageLocation.trim()) rows = rows.filter((r) => r.storageLocation === storageLocation.trim())
     return rows
   },
