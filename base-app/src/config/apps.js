@@ -59,4 +59,15 @@ export const APPS = [
     stat: { value: 5, label: 'awaiting ack' },
     url: appUrl(import.meta.env.VITE_PURCHASE_ORDER_URL, 5176),
   },
+  {
+    id: 'goods-movement',
+    name: 'Goods Movement',
+    short: 'GM',
+    icon: 'package',
+    description: 'Track and create inward and outward goods movements, gate passes, and delivery notes.',
+    color: '#6366f1',
+    tint: '#eef2ff',
+    stat: { value: 6, label: 'in transit' },
+    url: appUrl(import.meta.env.VITE_GOODS_MOVEMENT_URL, 5177),
+  },
 ]
