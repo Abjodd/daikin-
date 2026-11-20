@@ -77,6 +77,66 @@ export const fromSapDateDisplay = (sapDate) => {
   return sapDate
 }
 
+export const getTrackTimestamp = (t) => {
+  if (!t) return 0
+  const raw = t.rawDate || t.date || t.ewayBillDate || t.CreatedAt || t.CreatedDate || t.EwayBillDate || ''
+  if (typeof raw === 'number') return raw
+  if (typeof raw === 'string') {
+    if (raw.includes('/Date(')) {
+      const ms = parseInt(raw.replace(/[^0-9]/g, ''), 10)
+      if (!isNaN(ms)) return ms
+    }
+    const clean = raw.replace(/-/g, '').trim()
+    if (clean.length === 8 && /^\d{8}$/.test(clean)) {
+      const y = parseInt(clean.slice(0, 4), 10)
+      const m = parseInt(clean.slice(4, 6), 10) - 1
+      const d = parseInt(clean.slice(6, 8), 10)
+      return new Date(y, m, d).getTime()
+    }
+    const parsed = new Date(raw).getTime()
+    if (!isNaN(parsed)) return parsed
+  }
+  return 0
+}
+
+export const parseSapTrackNum = (id) => {
+  const clean = String(id || '').split('/')[0].trim()
+  if (/^0+\d+$/.test(clean)) {
+    return parseInt(clean, 10)
+  }
+  const num = clean.replace(/\D/g, '')
+  return num ? parseInt(num, 10) : 0
+}
+
+export const compareTrackings = (a, b, sortBy = 'latest') => {
+  const timeA = getTrackTimestamp(a)
+  const timeB = getTrackTimestamp(b)
+
+  // Compare dates (day resolution)
+  const dayA = Math.floor(timeA / 86400000)
+  const dayB = Math.floor(timeB / 86400000)
+
+  if (dayA !== dayB && timeA > 0 && timeB > 0) {
+    return sortBy === 'oldest' ? dayA - dayB : dayB - dayA
+  }
+
+  // Same date or date not available: compare tracking numbers
+  const idA = String(a.id || a.trackingNo || '').split('/')[0].trim()
+  const idB = String(b.id || b.trackingNo || '').split('/')[0].trim()
+
+  const isSapA = /^0+\d+$/.test(idA)
+  const isSapB = /^0+\d+$/.test(idB)
+
+  // Real sequential SAP tracking numbers (e.g. 0000000033) take precedence over legacy arbitrary numbers
+  if (isSapA && !isSapB) return sortBy === 'oldest' ? 1 : -1
+  if (!isSapA && isSapB) return sortBy === 'oldest' ? -1 : 1
+
+  const numA = parseSapTrackNum(idA)
+  const numB = parseSapTrackNum(idB)
+
+  return sortBy === 'oldest' ? numA - numB : numB - numA
+}
+
 const resolveStatusColor = (statusText) => {
   const t = String(statusText || '').toLowerCase()
   if (t.includes('yet to ship') || t.includes('created')) return 'red'
@@ -123,6 +183,7 @@ const mapHeadItem = (d) => {
     transportMode: d.TransportMode || 'By Road',
     transportationMode: d.TransportMode || 'By Road',
     date: fromSapDateDisplay(d.CreatedAt || d.EwayBillDate) || '',
+    rawDate: d.CreatedAt || d.CreatedDate || d.EwayBillDate || '',
     plant: d.Plant || '',
     plantName: d.PlantName || '',
     status: status,
@@ -191,6 +252,9 @@ export const goodsMovementApi = {
       
       if (data && data.d) {
         const list = (data.d.results || []).map(mapHeadItem)
+        // Always sort latest created tracking numbers on top by default (date first, then SAP sequence number)
+        list.sort((a, b) => compareTrackings(a, b, 'latest'))
+
         // If live SAP returned a response (even if empty []), NEVER fall back in PROD
         if (import.meta.env.PROD || list.length > 0) {
           return list
@@ -204,7 +268,7 @@ export const goodsMovementApi = {
     }
 
     // Local DEV fallback only
-    let mockList = MOCK_TRACKINGS.map(t => ({ ...t }))
+    let mockList = MOCK_TRACKINGS.map(t => ({ ...t, companyCode: '', supplierName: '', supplierLocation: '' }))
     if (search.trim()) {
       const q = search.trim().toLowerCase()
       mockList = mockList.filter(
@@ -214,6 +278,7 @@ export const goodsMovementApi = {
              m.status.toLowerCase().includes(q)
       )
     }
+    mockList.sort((a, b) => compareTrackings(a, b, 'latest'))
     return mockList
   },
 
@@ -255,7 +320,7 @@ export const goodsMovementApi = {
     }
 
     const match = MOCK_TRACKINGS.find(t => t.id === id || t.trackingNo === rawTrackNo || t.trackingNo === trackingNo)
-    return match ? { ...match } : {
+    return match ? { ...match, companyCode: '', supplierName: '', supplierLocation: '' } : {
       id,
       trackingNo,
       year: '2026',

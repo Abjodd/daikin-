@@ -6,6 +6,7 @@ export default function Header({
   companyCode = '',
   supplierName = '',
   supplierLocation = '',
+  hideSubheader = false,
   onBack,
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -67,93 +68,100 @@ export default function Header({
         </div>
       </div>
 
-      {/* Desktop Subheader Strip (lg and larger screens) */}
-      <div className="hidden lg:flex items-center justify-between gap-6 px-6 py-2 bg-[#f8fafc] border-b border-[#e2e8f0] text-[12px] text-[#475569] min-h-[36px]">
-        <div className="flex items-center gap-1.5 truncate">
-          <span className="font-medium text-[#64748b]">Company Code:</span>{' '}
-          <span className="font-semibold text-[#0f172a]">{activeCompany}</span>
-        </div>
-        <div className="flex items-center gap-1.5 truncate">
-          <span className="font-medium text-[#64748b]">Supplier Name:</span>{' '}
-          <span className="font-semibold text-[#0f172a]">{activeSupplierName}</span>
-        </div>
-        <div className="flex items-center gap-1.5 truncate">
-          <span className="font-medium text-[#64748b]">Supplier Location:</span>{' '}
-          <span className="font-semibold text-[#0f172a]">{activeSupplierLoc}</span>
-        </div>
-      </div>
+      {/* Subheader Strips (Hidden when hideSubheader is true) */}
+      {!hideSubheader && (
+        <>
+          {/* Desktop Subheader Strip (lg and larger screens) */}
+          <div className="hidden lg:flex items-center justify-between gap-6 px-6 py-2 bg-[#f8fafc] border-b border-[#e2e8f0] text-[12px] text-[#475569] min-h-[36px]">
+            <div className="flex items-center gap-1.5 truncate">
+              <span className="font-medium text-[#64748b]">Company Code:</span>{' '}
+              <span className="font-semibold text-[#0f172a]">{activeCompany}</span>
+            </div>
+            <div className="flex items-center gap-1.5 truncate">
+              <span className="font-medium text-[#64748b]">Supplier Name:</span>{' '}
+              <span className="font-semibold text-[#0f172a]">{activeSupplierName}</span>
+            </div>
+            <div className="flex items-center gap-1.5 truncate">
+              <span className="font-medium text-[#64748b]">Supplier Location:</span>{' '}
+              <span className="font-semibold text-[#0f172a]">{activeSupplierLoc}</span>
+            </div>
+          </div>
 
-      {/* iPad / Tablet Strip (sm to lg screens) */}
-      <div className="hidden sm:flex lg:hidden items-center justify-between gap-4 px-4 py-2 bg-[#f8fafc] border-b border-[#e2e8f0] text-[11.5px] text-[#475569] min-h-[36px]">
-        <div className="flex items-center gap-2 truncate">
-          {shortCompany && (
-            <>
-              <span className="font-bold text-[#0a6ed1] bg-[#eff6ff] px-2 py-0.5 rounded border border-[#bfdbfe]/60">
-                {shortCompany}
-              </span>
-              <span className="text-[#94a3b8]">|</span>
-            </>
-          )}
-          <span className="font-semibold text-[#1e293b] truncate">{activeSupplierName}</span>
-          {activeSupplierLoc && (
-            <>
-              <span className="text-[#94a3b8]">|</span>
-              <span className="text-[#64748b] truncate">{activeSupplierLoc}</span>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Mobile Strip (< sm screens) */}
-      <div className="sm:hidden bg-[#f8fafc] border-b border-[#e2e8f0] px-3 py-1.5 text-[11px]">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5 truncate">
-            {shortCompany && (
-              <span className="font-bold text-[#0a6ed1] bg-[#eff6ff] px-1.5 py-0.5 rounded border border-[#bfdbfe]/60 text-[10px]">
-                {shortCompany}
-              </span>
-            )}
-            <span className="font-semibold text-[#1e293b] truncate">
-              {activeSupplierName}
-            </span>
-            {activeSupplierLoc && (
-              <>
-                <span className="text-[#94a3b8]">·</span>
-                <span className="text-[#64748b] truncate">
-                  {activeSupplierLoc}
+          {/* iPad / Tablet Strip (sm to lg screens) */}
+          <div className="hidden sm:flex lg:hidden items-center justify-between gap-4 px-4 py-2 bg-[#f8fafc] border-b border-[#e2e8f0] text-[11.5px] text-[#475569] min-h-[36px]">
+            <div className="flex items-center gap-2 truncate">
+              {shortCompany && (
+                <span className="font-bold text-[#0a6ed1] bg-[#eff6ff] px-2 py-0.5 rounded border border-[#bfdbfe]/60">
+                  {shortCompany}
                 </span>
-              </>
+              )}
+              {shortCompany && (activeSupplierName || activeSupplierLoc) && (
+                <span className="text-[#94a3b8]">|</span>
+              )}
+              {activeSupplierName && (
+                <span className="font-semibold text-[#1e293b] truncate">{activeSupplierName}</span>
+              )}
+              {activeSupplierName && activeSupplierLoc && (
+                <span className="text-[#94a3b8]">|</span>
+              )}
+              {activeSupplierLoc && (
+                <span className="text-[#64748b] truncate">{activeSupplierLoc}</span>
+              )}
+            </div>
+          </div>
+
+          {/* Mobile Strip (< sm screens) */}
+          <div className="sm:hidden bg-[#f8fafc] border-b border-[#e2e8f0] px-3 py-1.5 text-[11px]">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 truncate">
+                {shortCompany && (
+                  <span className="font-bold text-[#0a6ed1] bg-[#eff6ff] px-1.5 py-0.5 rounded border border-[#bfdbfe]/60 text-[10px]">
+                    {shortCompany}
+                  </span>
+                )}
+                <span className="font-semibold text-[#1e293b] truncate">
+                  {activeSupplierName}
+                </span>
+                {activeSupplierLoc && (
+                  <>
+                    <span className="text-[#94a3b8]">·</span>
+                    <span className="text-[#64748b] truncate">
+                      {activeSupplierLoc}
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {(activeCompany || activeSupplierName || activeSupplierLoc) && (
+                <button
+                  type="button"
+                  onClick={() => setDetailsOpen(prev => !prev)}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10.5px] font-medium text-[#0a6ed1] bg-[#eff6ff] hover:bg-[#dbeafe] transition-colors ml-2 flex-shrink-0 cursor-pointer"
+                >
+                  <span>{detailsOpen ? 'Hide' : 'Info'}</span>
+                </button>
+              )}
+            </div>
+
+            {detailsOpen && (
+              <div className="mt-2 pt-2 border-t border-[#e2e8f0] space-y-1.5 text-[11px] bg-white p-2.5 rounded-lg border border-[#e2e8f0] shadow-sm">
+                <div>
+                  <span className="text-[#64748b] font-medium">Company Code: </span>
+                  <span className="text-[#0f172a] font-semibold">{activeCompany}</span>
+                </div>
+                <div>
+                  <span className="text-[#64748b] font-medium">Supplier Name: </span>
+                  <span className="text-[#0f172a] font-semibold">{activeSupplierName}</span>
+                </div>
+                <div>
+                  <span className="text-[#64748b] font-medium">Supplier Location: </span>
+                  <span className="text-[#0f172a] font-semibold">{activeSupplierLoc}</span>
+                </div>
+              </div>
             )}
           </div>
-
-          {(activeCompany || activeSupplierName || activeSupplierLoc) && (
-            <button
-              type="button"
-              onClick={() => setDetailsOpen(prev => !prev)}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10.5px] font-medium text-[#0a6ed1] bg-[#eff6ff] hover:bg-[#dbeafe] transition-colors ml-2 flex-shrink-0 cursor-pointer"
-            >
-              <span>{detailsOpen ? 'Hide' : 'Info'}</span>
-            </button>
-          )}
-        </div>
-
-        {detailsOpen && (
-          <div className="mt-2 pt-2 border-t border-[#e2e8f0] space-y-1.5 text-[11px] bg-white p-2.5 rounded-lg border border-[#e2e8f0] shadow-sm">
-            <div>
-              <span className="text-[#64748b] font-medium">Company Code: </span>
-              <span className="text-[#0f172a] font-semibold">{activeCompany}</span>
-            </div>
-            <div>
-              <span className="text-[#64748b] font-medium">Supplier Name: </span>
-              <span className="text-[#0f172a] font-semibold">{activeSupplierName}</span>
-            </div>
-            <div>
-              <span className="text-[#64748b] font-medium">Supplier Location: </span>
-              <span className="text-[#0f172a] font-semibold">{activeSupplierLoc}</span>
-            </div>
-          </div>
-        )}
-      </div>
+        </>
+      )}
     </header>
   )
 }

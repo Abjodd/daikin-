@@ -366,7 +366,7 @@ const handleSuccessOk = () => {
   )
 
   return (
-    <PageLayout>
+    <PageLayout hideSubheader={true} onBack={goBack}>
       <style>{`
         @keyframes fadeIn    { from { opacity: 0; transform: translateY(8px);  } to { opacity: 1; transform: translateY(0); } }
         @keyframes slideInUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
@@ -408,7 +408,7 @@ const handleSuccessOk = () => {
       </div>
 
       {/* Form area */}
-      <div className="bg-[#f5f6f7] min-h-[calc(100vh-220px)] pb-24">
+      <div className="bg-[#f5f6f7] flex-1 overflow-y-auto min-h-0 pb-24">
         <div className="max-w-[920px] mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-8 anim-slide-up">
           <div className="bg-white rounded-xl border border-[#e5e5e5] shadow-sm p-5 sm:p-8 row-stagger">
 
