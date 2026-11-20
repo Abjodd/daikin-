@@ -47,6 +47,25 @@ export const fromSapDateDisplay = (sapDate) => {
   return `${months[m]} ${String(d).padStart(2, '0')}, ${y}`
 }
 
+export function getSapTimestamp(d = new Date()) {
+  const pad = (n, len = 2) => String(n).padStart(len, '0')
+  const y = d.getUTCFullYear()
+  const m = pad(d.getUTCMonth() + 1)
+  const day = pad(d.getUTCDate())
+  const h = pad(d.getUTCHours())
+  const min = pad(d.getUTCMinutes())
+  const s = pad(d.getUTCSeconds())
+  return `${y}${m}${day}${h}${min}${s}`
+}
+
+/**
+ * Preserves exact ASN string as returned by SAP backend without stripping or slicing.
+ */
+export function formatAsnForSap(asnId) {
+  if (!asnId) return ''
+  return String(asnId).trim()
+}
+
 const getHeaders = () => ({
   Accept: 'application/json',
   Loginid: authConfig.loginId,
@@ -80,50 +99,58 @@ async function fetchCsrfToken() {
 
 export const createMovementApi = {
   /**
-   * Search available ASNs from ZP_PUR_ASN_HEAD in /sap/opu/odata/sap/ZSB_PURCAHSE
+   * Search available ASNs from ZCDS_ACTIVE_ASN (backend entity carrying only active ASNs)
+   * with fallback to ZP_PUR_ASN_HEAD
    */
   async searchAsns({ search = '' } = {}) {
-    try {
-      const res = await fetch(`${ASN_ODATA_SRV}/ZP_PUR_ASN_HEAD?$format=json&$top=100`, {
-        headers: getHeaders(),
-        credentials: 'include',
-      })
-      if (res.ok) {
-        const data = await res.json()
-        const rawResults = data.d?.results || []
-        let results = rawResults.map((r) => ({
-          asnId: r.Asnnumber || '',
-          asnYear: String(new Date().getFullYear()),
-          invoiceNumber: r.Invoice || '',
-          invoiceAmount: parseFloat(r.Invoiceamount || '0') || 0,
-          invoiceValue: parseFloat(r.Invoicevalue || r.Invoiceamount || '0') || 0,
-          invoiceDate: r.Invoicedate || '',
-          companyCode: r.Companycode || '',
-          supplierCode: r.Suppliercode || '',
-          supplierName: r.SupplierFullName || r.SupplierName || '',
-          supplierLocation: r.SupplierLocation || r.supplieraddress || '',
-          purchaseOrder: r.Purchaseorder || '',
-          plant: r.Plant || '',
-          currency: 'INR',
-          isActive: r.Isactive || 'X',
-        }))
+    const endpoints = [
+      `${SRV}/ZCDS_ACTIVE_ASN?$format=json&$top=100`,
+      `${ASN_ODATA_SRV}/ZCDS_ACTIVE_ASN?$format=json&$top=100`,
+      `${ASN_ODATA_SRV}/ZP_PUR_ASN_HEAD?$format=json&$top=100`,
+    ]
 
-        if (search.trim()) {
-          const q = search.trim().toLowerCase()
-          results = results.filter(
-            (a) =>
-              (a.asnId || '').toLowerCase().includes(q) ||
-              (a.invoiceNumber || '').toLowerCase().includes(q) ||
-              (a.purchaseOrder || '').toLowerCase().includes(q) ||
-              (a.plant || '').toLowerCase().includes(q)
-          )
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, {
+          headers: getHeaders(),
+          credentials: 'include',
+        })
+        if (res.ok) {
+          const data = await res.json()
+          const rawResults = data.d?.results || []
+          if (rawResults.length > 0) {
+            let results = rawResults.map((r) => ({
+              asnId: r.Asnnumber || r.AsnNo || r.Asn_No || r.Asnnum || '',
+              asnYear: String(new Date().getFullYear()),
+              invoiceNumber: r.Invoice || r.InvoiceNo || r.Invoice_Num || '',
+              invoiceAmount: parseFloat(r.Invoiceamount || r.InvoiceAmount || '0') || 0,
+              invoiceValue: parseFloat(r.Invoicevalue || r.InvoiceValue || r.Invoiceamount || '0') || 0,
+              invoiceDate: r.Invoicedate || r.InvoiceDate || '',
+              companyCode: r.Companycode || r.CompanyCode || '',
+              supplierCode: r.Suppliercode || r.Supplier || '',
+              supplierName: r.SupplierFullName || r.SupplierName || '',
+              supplierLocation: r.SupplierLocation || r.supplieraddress || '',
+              purchaseOrder: r.Purchaseorder || r.PurchaseOrder || '',
+              plant: r.Plant || '',
+              currency: 'INR',
+              isActive: r.Isactive || 'X',
+            }))
+
+            if (search.trim()) {
+              const q = search.trim().toLowerCase()
+              results = results.filter(
+                (a) =>
+                  (a.asnId || '').toLowerCase().includes(q) ||
+                  (a.invoiceNumber || '').toLowerCase().includes(q) ||
+                  (a.purchaseOrder || '').toLowerCase().includes(q) ||
+                  (a.plant || '').toLowerCase().includes(q)
+              )
+            }
+            if (results.length > 0) return results
+          }
         }
-        if (results.length > 0) return results
-      }
-    } catch (err) {
-      console.warn('[CreateMovement.searchAsns] Live ZP_PUR_ASN_HEAD fetch failed:', err.message)
-      if (import.meta.env.PROD) {
-        throw err
+      } catch (err) {
+        console.warn(`[CreateMovement.searchAsns] Fetch failed for ${url}:`, err.message)
       }
     }
 
@@ -384,6 +411,7 @@ export const createMovementApi = {
       if (res.ok) {
         // Save ASN associations to ZP_TRACKING_ASN
         for (const asn of form.asnNums || []) {
+          const formattedAsnNo = formatAsnForSap(asn.asnId)
           await fetch(`${SRV}/ZP_TRACKING_ASN`, {
             method: 'POST',
             headers: {
@@ -394,7 +422,8 @@ export const createMovementApi = {
             credentials: 'include',
             body: JSON.stringify({
               TrackingId: generatedTrackNo,
-              AsnNo: String(asn.asnId).slice(0, 20),
+              AsnNo: formattedAsnNo,
+              Iscancelled: '',
             }),
           }).catch((e) => console.warn('ASN post warning:', e))
         }

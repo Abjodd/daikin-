@@ -4,11 +4,12 @@ import CreateMovement from './createMovement.jsx'
 import { goodsMovementApi, authConfig } from '../services/GoodsMovement.js'
 import { useNavigate } from 'react-router-dom'
 import { generateShipmentNote } from '../services/generateShipmentNote.js'
+import { getAsnAppUrl } from '../config/app.js'
 import {
   FilePlus, Truck, Clock, ChevronRight, RefreshCw, X, Printer, Search,
   Car, ShieldCheck, HardHat, CalendarDays, Phone, User, Hash, Banknote,
   Edit3, Barcode, CheckCircle2, ChevronLeft, Files, LogIn, PackageCheck,
-  Building, PlayCircle
+  Building, PlayCircle, AlertTriangle
 } from 'lucide-react'
 import { useUser } from '../context/UserContext.jsx'
 
@@ -55,6 +56,17 @@ export default function GoodsMovement() {
   const [asnHelpOpen, setAsnHelpOpen] = useState(false)
   const [asnHelpSearch, setAsnHelpSearch] = useState('')
   const [asnHelpList, setAsnHelpList] = useState([])
+
+  // Cancel Movement Modal State
+  const [cancelModalOpen, setCancelModalOpen] = useState(false)
+  const [cancelLoading, setCancelLoading] = useState(false)
+  const [cancelError, setCancelError] = useState(null)
+  const [cancelSuccess, setCancelSuccess] = useState(false)
+
+  // Start Shipment State
+  const [shipmentLoading, setShipmentLoading] = useState(false)
+  const [shipmentModalOpen, setShipmentModalOpen] = useState(false)
+  const [shipmentModalMsg, setShipmentModalMsg] = useState('')
 
   // Load tracking list
   useEffect(() => {
@@ -171,6 +183,70 @@ export default function GoodsMovement() {
     } finally {
       setPrintLoading(false)
     }
+  }
+
+  // Confirm Cancel Movement
+  const handleConfirmCancelMovement = async () => {
+    if (!tracking) return
+    setCancelLoading(true)
+    setCancelError(null)
+    try {
+      await goodsMovementApi.cancelTracking(tracking.id, tracking.asns || [])
+      tracking.status = 'Cancelled'
+      tracking.statusColor = 'red'
+      if (tracking.asns) {
+        tracking.asns.forEach((a) => { a.isCancelled = 'X' })
+      }
+      setTracking({ ...tracking })
+      setCancelSuccess(true)
+      goodsMovementApi.listTrackings({ search: searchQuery }).then(setTrackings)
+    } catch (err) {
+      setCancelError(err.message || 'Failed to cancel movement. Please try again.')
+    } finally {
+      setCancelLoading(false)
+    }
+  }
+
+  // Handle Start Shipment
+  const handleStartShipment = async () => {
+    if (!tracking || shipmentLoading) return
+    setShipmentLoading(true)
+    try {
+      await goodsMovementApi.startShipment(tracking)
+      setShipmentModalMsg(`Shipment for Tracking No. ${tracking.id} has been started successfully.`)
+      setShipmentModalOpen(true)
+    } catch (err) {
+      alert(`Failed to start shipment: ${err.message}`)
+    } finally {
+      setShipmentLoading(false)
+    }
+  }
+
+  // Handle OK click on Start Shipment Modal -> Auto-refresh live data from SAP
+  const handleShipmentModalConfirm = async () => {
+    setShipmentModalOpen(false)
+    if (!tracking) return
+    try {
+      const [freshTracking, freshList] = await Promise.all([
+        goodsMovementApi.getTracking(tracking.id),
+        goodsMovementApi.listTrackings({ search: searchQuery }),
+      ])
+      if (freshTracking) {
+        setTracking(freshTracking)
+      }
+      if (freshList) {
+        setTrackings(freshList)
+      }
+    } catch (err) {
+      console.error('Refresh after start shipment failed:', err)
+    }
+  }
+
+  // Navigate to ASN in Advance Shipment Notes App
+  const handleNavigateToAsn = (asnId) => {
+    if (!asnId || asnId === '—') return
+    const targetUrl = getAsnAppUrl(asnId)
+    window.location.href = targetUrl
   }
 
   const isYetToShip = String(tracking?.status || '').toLowerCase().includes('yet to ship')
@@ -545,7 +621,11 @@ export default function GoodsMovement() {
                               key={idx}
                               className="border-b border-[#f1f5f9] last:border-b-0 hover:bg-[#f8fafc]"
                             >
-                              <td className="py-3.5 px-4 font-semibold text-[#0a6ed1] cursor-pointer hover:underline">
+                              <td
+                                onClick={() => handleNavigateToAsn(asn.asnId)}
+                                className="py-3.5 px-4 font-semibold text-[#0a6ed1] cursor-pointer hover:underline hover:text-[#085caf] transition-colors"
+                                title={`Open ${asn.asnId} in Advance Shipment Notes`}
+                              >
                                 {asn.asnId}
                               </td>
                               <td className="py-3.5 px-4 text-[#334155]">{asn.totalLineItems || 1}</td>
@@ -584,14 +664,19 @@ export default function GoodsMovement() {
                     <div className="flex items-center gap-2.5">
                       <button
                         type="button"
-                        onClick={() => {
-                          // Start shipment logic
-                          tracking.status = 'In Transit'
-                          setTracking({ ...tracking })
-                        }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-semibold text-white bg-[#107e3e] hover:bg-[#0d6633] rounded shadow-sm transition-all cursor-pointer"
+                        disabled={shipmentLoading}
+                        onClick={handleStartShipment}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-semibold text-white bg-[#107e3e] hover:bg-[#0d6633] rounded shadow-sm transition-all disabled:opacity-60 cursor-pointer"
                       >
-                        <PlayCircle size={15} /> Start Shipment
+                        {shipmentLoading ? (
+                          <>
+                            <RefreshCw size={14} className="animate-spin" /> Starting...
+                          </>
+                        ) : (
+                          <>
+                            <PlayCircle size={15} /> Start Shipment
+                          </>
+                        )}
                       </button>
                       <button
                         type="button"
@@ -603,10 +688,9 @@ export default function GoodsMovement() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (window.confirm('Are you sure you want to cancel this movement?')) {
-                            tracking.status = 'Cancelled'
-                            setTracking({ ...tracking })
-                          }
+                          setCancelError(null)
+                          setCancelSuccess(false)
+                          setCancelModalOpen(true)
                         }}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-semibold text-[#cc1c14] border border-[#cc1c14] hover:bg-[#fce8e6] rounded transition-all cursor-pointer"
                       >
@@ -762,6 +846,137 @@ export default function GoodsMovement() {
                   Cancel
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* CANCEL MOVEMENT CONFIRMATION MODAL */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {cancelModalOpen && tracking && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-md border border-[#e5e5e5] overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-[#e5e5e5] bg-[#fafafa]">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-full bg-[#fce8e6] flex items-center justify-center text-[#cc1c14]">
+                    <AlertTriangle size={18} />
+                  </div>
+                  <h3 className="text-[16px] font-bold text-[#1f2937]">
+                    Cancel Movement
+                  </h3>
+                </div>
+                {!cancelLoading && (
+                  <button
+                    type="button"
+                    onClick={() => setCancelModalOpen(false)}
+                    className="text-[#64748b] hover:text-[#1f2937] p-1 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <X size={18} />
+                  </button>
+                )}
+              </div>
+
+              {/* Body */}
+              <div className="p-6">
+                {cancelSuccess ? (
+                  <div className="flex flex-col items-center text-center py-2">
+                    <div className="w-12 h-12 rounded-full bg-[#ecfdf5] flex items-center justify-center text-[#107e3e] mb-3">
+                      <CheckCircle2 size={28} />
+                    </div>
+                    <h4 className="text-[16px] font-bold text-[#1f2937] mb-1">
+                      Movement Cancelled Successfully
+                    </h4>
+                    <p className="text-[13px] text-[#64748b]">
+                      Tracking ID <span className="font-semibold text-[#1f2937]">{tracking.id}</span> has been marked as cancelled.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-[14px] text-[#334155] leading-relaxed mb-3">
+                      Are you sure you want to cancel Tracking ID <span className="font-bold text-[#1f2937]">{tracking.id}</span>?
+                    </p>
+                    <p className="text-[13px] text-[#64748b] leading-relaxed mb-4">
+                      All associated ASNs will be marked as cancelled in the tracking register and released. This action cannot be undone.
+                    </p>
+
+                    {cancelError && (
+                      <div className="p-3 bg-[#fce8e6] border border-[#fecaca] rounded-lg text-[#cc1c14] text-[13px] font-medium flex items-start gap-2 mb-2">
+                        <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+                        <span>{cancelError}</span>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-end gap-3 px-6 py-4 bg-[#fafafa] border-t border-[#e5e5e5]">
+                {cancelSuccess ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCancelModalOpen(false)
+                      setCancelSuccess(false)
+                    }}
+                    className="px-5 py-2 text-[13px] font-semibold text-white bg-[#0a6ed1] hover:bg-[#085caf] rounded-lg shadow-sm transition-all cursor-pointer"
+                  >
+                    OK
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      disabled={cancelLoading}
+                      onClick={() => setCancelModalOpen(false)}
+                      className="px-4 py-2 text-[13px] font-semibold text-[#475569] hover:bg-[#f1f5f9] rounded-lg transition-all disabled:opacity-50 cursor-pointer"
+                    >
+                      Keep Movement
+                    </button>
+                    <button
+                      type="button"
+                      disabled={cancelLoading}
+                      onClick={handleConfirmCancelMovement}
+                      className="flex items-center gap-2 px-4 py-2 text-[13px] font-semibold text-white bg-[#cc1c14] hover:bg-[#b01710] rounded-lg shadow-sm transition-all disabled:opacity-60 cursor-pointer"
+                    >
+                      {cancelLoading ? (
+                        <>
+                          <RefreshCw size={14} className="animate-spin" />
+                          <span>Cancelling...</span>
+                        </>
+                      ) : (
+                        <span>Yes, Cancel Movement</span>
+                      )}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* START SHIPMENT SUCCESS MODAL */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {shipmentModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6 border border-[#e5e5e5] text-center">
+              <div className="w-14 h-14 rounded-full bg-[#ecfdf5] text-[#107e3e] flex items-center justify-center mx-auto mb-4 shadow-sm">
+                <CheckCircle2 size={32} />
+              </div>
+              <h3 className="text-[17px] font-bold text-[#1f2937] mb-2">
+                Shipment Started!
+              </h3>
+              <p className="text-[13.5px] text-[#475569] leading-relaxed mb-6">
+                {shipmentModalMsg}
+              </p>
+              <button
+                type="button"
+                onClick={handleShipmentModalConfirm}
+                className="w-full h-10 text-[13.5px] font-semibold text-white bg-[#107e3e] hover:bg-[#0d6632] rounded-lg shadow-sm transition-all cursor-pointer"
+              >
+                OK
+              </button>
             </div>
           </div>
         )}

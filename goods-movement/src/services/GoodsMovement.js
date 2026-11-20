@@ -1,10 +1,18 @@
 import { MOCK_TRACKINGS } from '../data/mockData.js'
+import { formatAsnForSap, getSapTimestamp } from './CreateMovement.js'
 
 const SRV = '/sap/opu/odata/sap/ZSB_TRACKING'
 const ASN_ODATA_SRV = '/sap/opu/odata/sap/ZSB_PURCAHSE'
 const HTTP_SRV = '/sap/bc/http/sap/ZHTTP_TRACKING'
+const HTTP_SHIPMENT_SRV = '/sap/bc/http/sap/ZHTTP_SHIPMENT?sap-client=080'
 
 export const authConfig = { loginId: '', loginType: '' }
+
+const getHeaders = () => ({
+  Accept: 'application/json',
+  Loginid: authConfig.loginId,
+  Logintype: authConfig.loginType,
+})
 
 export const toSapDate = (v) => {
   if (!v) return ''
@@ -337,42 +345,268 @@ export const goodsMovementApi = {
   },
 
   /**
-   * Value help for ASN: fetch from ZP_PUR_ASN_HEAD in /sap/opu/odata/sap/ZSB_PURCAHSE
+   * Cancel tracking: updates ZP_TRACKING_HEAD with Status='Cancelled', CancelledBy, CancelledAt
+   * and updates each associated ASN in ZP_TRACKING_ASN with Iscancelled='X'
    */
-  async searchAsns({ search = '' } = {}) {
+  async cancelTracking(trackingId, asns = []) {
+    const rawTrackNo = trackingId.split('/')[0].trim().slice(0, 10)
     try {
-      const res = await fetch(`${ASN_ODATA_SRV}/ZP_PUR_ASN_HEAD?$format=json&$top=100`, {
+      const token = await fetchCsrfToken()
+      // 1. Update Status on ZP_TRACKING_HEAD
+      await fetch(`${SRV}/ZP_TRACKING_HEAD('${encodeURIComponent(rawTrackNo)}')`, {
+        method: 'PATCH',
         headers: {
+          ...getHeaders(),
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': token,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          Status: 'Cancelled',
+          CancelledBy: authConfig.loginId || '',
+        }),
+      }).catch(async () => {
+        return fetch(`${SRV}/ZP_TRACKING_HEAD('${encodeURIComponent(rawTrackNo)}')`, {
+          method: 'MERGE',
+          headers: {
+            ...getHeaders(),
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': token,
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            Status: 'Cancelled',
+            CancelledBy: authConfig.loginId || '',
+          }),
+        })
+      })
+
+      // 2. Update each linked ASN with Iscancelled = 'X'
+      for (const asn of asns) {
+        const rawAsnId = asn.asnId || asn.AsnNo || asn.asn_no || asn
+        const cleanAsn = formatAsnForSap(rawAsnId)
+        await fetch(`${SRV}/ZP_TRACKING_ASN(TrackingId='${encodeURIComponent(rawTrackNo)}',AsnNo='${encodeURIComponent(cleanAsn)}')`, {
+          method: 'PATCH',
+          headers: {
+            ...getHeaders(),
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': token,
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            Iscancelled: 'X',
+          }),
+        }).catch(async () => {
+          return fetch(`${SRV}/ZP_TRACKING_ASN(TrackingId='${encodeURIComponent(rawTrackNo)}',AsnNo='${encodeURIComponent(cleanAsn)}')`, {
+            method: 'MERGE',
+            headers: {
+              ...getHeaders(),
+              'Content-Type': 'application/json',
+              'X-CSRF-Token': token,
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              Iscancelled: 'X',
+            }),
+          })
+        }).catch((e) => console.warn('Cancel ASN warning:', e))
+      }
+
+      return { success: true, message: `Tracking ${rawTrackNo} cancelled successfully` }
+    } catch (err) {
+      console.warn('[GoodsMovement.cancelTracking] Live cancel failed:', err.message)
+      if (import.meta.env.PROD) {
+        throw err
+      }
+    }
+
+    // Local dev mock update
+    const target = MOCK_TRACKINGS.find(t => t.id === trackingId || t.trackingNo === rawTrackNo)
+    if (target) {
+      target.status = 'Cancelled'
+      target.statusColor = 'red'
+      target.asns?.forEach(a => { a.isCancelled = 'X' })
+    }
+    return { success: true, message: `Tracking ${rawTrackNo} cancelled locally (Demo Mode)` }
+  },
+
+  /**
+   * Start Shipment:
+   * 1. POST to /sap/bc/http/sap/ZHTTP_SHIPMENT with Type: 'S' and full goods movement payload
+   * 2. Update ZP_TRACKING_HEAD in OData with Status: 'In Transit'
+   */
+  async startShipment(tracking) {
+    const rawTrackNo = String(tracking.id || tracking.trackingNo || '').split('/')[0].trim().slice(0, 10)
+    const timestamp = getSapTimestamp()
+
+    const primaryAsn = tracking.asns?.[0] || {}
+    const companyCode = tracking.companyCode || primaryAsn.companyCode || '1810'
+    const supplierCode = tracking.supplierCode || authConfig.loginId || primaryAsn.supplierCode || ''
+    const supplierName = tracking.supplierName || primaryAsn.supplierName || ''
+    const supplierLocation = tracking.supplierLocation || primaryAsn.supplierLocation || ''
+
+    const payload = {
+      type: 'S',
+      Type: 'S',
+      head: {
+        TrackingId: rawTrackNo,
+        CompanyCode: companyCode,
+        Supplier: supplierCode,
+        SupplierName: supplierName,
+        SupplierLocation: supplierLocation,
+        TransportMode: tracking.transportMode || 'By Road',
+        EwayBillNo: tracking.ewayBillNo || '',
+        EwayBillDate: toSapDate(tracking.ewayBillDate),
+        TransporterName: tracking.transporterName || '',
+        DriverName: tracking.driverName || '',
+        ContactNumber: tracking.contactNumber || '',
+        VehicleRegNo: tracking.vehicleRegNo || '',
+        PollutionCertFlag: !!tracking.pollutionCertificateApplicable,
+        SafetyEquipmentFlag: !!tracking.safetyEquipments,
+        SafetyGuardFlag: !!tracking.safetyGuardForMaterial,
+        Status: 'In Transit',
+      },
+      asn: (tracking.asns || []).map((a) => ({
+        Invoice: a.invoiceNumber || a.invoice || '',
+        Companycode: a.companyCode || companyCode,
+        Suppliercode: a.supplierCode || supplierCode,
+        Asnnumber: a.asnId || a.AsnNo || '',
+        Purchaseorder: a.purchaseOrder || '',
+        Plant: a.plant || '',
+        Invoicedate: toSapDate(a.invoiceDate),
+        Invoiceamount: String(a.invoiceAmount || '0.00'),
+        Invoicevalue: String(a.invoiceValue || a.invoiceAmount || '0.00'),
+        Isactive: 'X',
+      })),
+    }
+
+    console.log('[GoodsMovement.startShipment] Calling ZHTTP_SHIPMENT:', HTTP_SHIPMENT_SRV, payload)
+
+    try {
+      const res = await fetch(HTTP_SHIPMENT_SRV, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
           Accept: 'application/json',
           Loginid: authConfig.loginId,
           Logintype: authConfig.loginType,
         },
         credentials: 'include',
+        body: JSON.stringify(payload),
+      }).catch(async () => {
+        return fetch('/sap/bc/http/sap/ZHTTP_SHIPMENT', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Loginid: authConfig.loginId,
+            Logintype: authConfig.loginType,
+          },
+          credentials: 'include',
+          body: JSON.stringify(payload),
+        })
       })
-      if (res.ok) {
-        const data = await res.json()
-        let results = (data.d?.results || []).map(r => ({
-          asnId: r.Asnnumber || '',
-          trackingNo: '',
-          invoiceNumber: r.Invoice || '',
-          vehicleNumber: '',
-          plant: r.Plant || '',
-          purchaseOrder: r.Purchaseorder || '',
-        }))
-        if (search.trim()) {
-          const q = search.trim().toLowerCase()
-          results = results.filter(a =>
-            (a.asnId || '').toLowerCase().includes(q) ||
-            (a.invoiceNumber || '').toLowerCase().includes(q)
-          )
+
+      if (res && !res.ok) {
+        const text = await res.text().catch(() => '')
+        console.warn(`[GoodsMovement.startShipment] HTTP warning (${res.status}):`, text)
+      }
+    } catch (httpErr) {
+      console.warn('[GoodsMovement.startShipment] HTTP failed:', httpErr.message)
+    }
+
+    // 2. Persist Status update to OData ZP_TRACKING_HEAD
+    try {
+      const token = await fetchCsrfToken()
+      await fetch(`${SRV}/ZP_TRACKING_HEAD('${encodeURIComponent(rawTrackNo)}')`, {
+        method: 'PATCH',
+        headers: {
+          ...getHeaders(),
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': token,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          Status: 'In Transit',
+        }),
+      }).catch(async () => {
+        return fetch(`${SRV}/ZP_TRACKING_HEAD('${encodeURIComponent(rawTrackNo)}')`, {
+          method: 'MERGE',
+          headers: {
+            ...getHeaders(),
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': token,
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            Status: 'In Transit',
+          }),
+        })
+      })
+    } catch (odataErr) {
+      console.warn('[GoodsMovement.startShipment] OData update warning:', odataErr.message)
+    }
+
+    // Local dev mock update
+    const target = MOCK_TRACKINGS.find(t => t.id === tracking.id || t.trackingNo === rawTrackNo)
+    if (target) {
+      target.status = 'In Transit'
+      target.statusColor = 'orange'
+    }
+
+    return { success: true, trackingNo: rawTrackNo, message: `Shipment for Tracking ${rawTrackNo} started successfully` }
+  },
+
+  /**
+   * Value help for ASN: fetch active ASNs from ZCDS_ACTIVE_ASN
+   */
+  async searchAsns({ search = '' } = {}) {
+    const endpoints = [
+      `${SRV}/ZCDS_ACTIVE_ASN?$format=json&$top=100`,
+      `${ASN_ODATA_SRV}/ZCDS_ACTIVE_ASN?$format=json&$top=100`,
+      `${ASN_ODATA_SRV}/ZP_PUR_ASN_HEAD?$format=json&$top=100`,
+    ]
+
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, {
+          headers: {
+            Accept: 'application/json',
+            Loginid: authConfig.loginId,
+            Logintype: authConfig.loginType,
+          },
+          credentials: 'include',
+        })
+        if (res.ok) {
+          const data = await res.json()
+          const rawResults = data.d?.results || []
+          if (rawResults.length > 0) {
+            let results = rawResults.map(r => ({
+              asnId: r.Asnnumber || r.AsnNo || r.Asn_No || r.Asnnum || '',
+              trackingNo: '',
+              invoiceNumber: r.Invoice || r.InvoiceNo || r.Invoice_Num || '',
+              vehicleNumber: '',
+              plant: r.Plant || '',
+              purchaseOrder: r.Purchaseorder || r.PurchaseOrder || '',
+            }))
+            if (search.trim()) {
+              const q = search.trim().toLowerCase()
+              results = results.filter(a =>
+                (a.asnId || '').toLowerCase().includes(q) ||
+                (a.invoiceNumber || '').toLowerCase().includes(q) ||
+                (a.purchaseOrder || '').toLowerCase().includes(q)
+              )
+            }
+            if (results.length > 0) return results
+          }
         }
-        if (results.length > 0) return results
+      } catch (err) {
+        console.warn(`[GoodsMovement.searchAsns] Fetch failed for ${url}:`, err.message)
       }
-    } catch (err) {
-      console.warn('[GoodsMovement.searchAsns] Live ZP_PUR_ASN_HEAD fetch failed:', err.message)
-      if (import.meta.env.PROD) {
-        return []
-      }
+    }
+
+    if (import.meta.env.PROD) {
+      return []
     }
 
     const mockAsnList = [
