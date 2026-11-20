@@ -103,55 +103,125 @@ export const createMovementApi = {
    * with fallback to ZP_PUR_ASN_HEAD
    */
   async searchAsns({ search = '' } = {}) {
-    const endpoints = [
-      `${SRV}/ZCDS_ACTIVE_ASN?$format=json&$top=100`,
-      `${ASN_ODATA_SRV}/ZCDS_ACTIVE_ASN?$format=json&$top=100`,
-      `${ASN_ODATA_SRV}/ZP_PUR_ASN_HEAD?$format=json&$top=100`,
-    ]
+    try {
+      // 1. Fetch active ASNs from ZCDS_ACTIVE_ASN
+      let activeAsnList = []
+      const activeUrls = [
+        `${SRV}/ZCDS_ACTIVE_ASN?$format=json&$top=100`,
+        `${ASN_ODATA_SRV}/ZCDS_ACTIVE_ASN?$format=json&$top=100`,
+      ]
+      for (const url of activeUrls) {
+        try {
+          const res = await fetch(url, {
+            headers: getHeaders(),
+            credentials: 'include',
+          })
+          if (res.ok) {
+            const data = await res.json()
+            const r = data.d?.results || []
+            if (r.length > 0) {
+              activeAsnList = r
+              break
+            }
+          }
+        } catch (err) {
+          console.warn(`[CreateMovement.searchAsns] Active ASN fetch failed for ${url}:`, err.message)
+        }
+      }
 
-    for (const url of endpoints) {
+      // 2. Fetch full ASN metadata (Supplier, Company, Invoice, PO) from ZP_PUR_ASN_HEAD
+      const purHeadMap = new Map()
       try {
-        const res = await fetch(url, {
+        const purRes = await fetch(`${ASN_ODATA_SRV}/ZP_PUR_ASN_HEAD?$format=json&$top=200`, {
           headers: getHeaders(),
           credentials: 'include',
         })
-        if (res.ok) {
-          const data = await res.json()
-          const rawResults = data.d?.results || []
-          if (rawResults.length > 0) {
-            let results = rawResults.map((r) => ({
-              asnId: r.Asnnumber || r.AsnNo || r.Asn_No || r.Asnnum || '',
-              asnYear: String(new Date().getFullYear()),
-              invoiceNumber: r.Invoice || r.InvoiceNo || r.Invoice_Num || '',
-              invoiceAmount: parseFloat(r.Invoiceamount || r.InvoiceAmount || '0') || 0,
-              invoiceValue: parseFloat(r.Invoicevalue || r.InvoiceValue || r.Invoiceamount || '0') || 0,
-              invoiceDate: r.Invoicedate || r.InvoiceDate || '',
-              companyCode: r.Companycode || r.CompanyCode || '',
-              supplierCode: r.Suppliercode || r.Supplier || '',
-              supplierName: r.SupplierFullName || r.SupplierName || '',
-              supplierLocation: r.SupplierLocation || r.supplieraddress || '',
-              purchaseOrder: r.Purchaseorder || r.PurchaseOrder || '',
-              plant: r.Plant || '',
-              currency: 'INR',
-              isActive: r.Isactive || 'X',
-            }))
-
-            if (search.trim()) {
-              const q = search.trim().toLowerCase()
-              results = results.filter(
-                (a) =>
-                  (a.asnId || '').toLowerCase().includes(q) ||
-                  (a.invoiceNumber || '').toLowerCase().includes(q) ||
-                  (a.purchaseOrder || '').toLowerCase().includes(q) ||
-                  (a.plant || '').toLowerCase().includes(q)
-              )
+        if (purRes.ok) {
+          const purData = await purRes.json()
+          for (const item of (purData.d?.results || [])) {
+            const rawNo = String(item.Asnnumber || item.Asn_No || item.Asnnum || '').trim()
+            if (rawNo) {
+              purHeadMap.set(rawNo, item)
+              purHeadMap.set(rawNo.replace(/^ASN/i, ''), item)
             }
-            if (results.length > 0) return results
           }
         }
       } catch (err) {
-        console.warn(`[CreateMovement.searchAsns] Fetch failed for ${url}:`, err.message)
+        console.warn('[CreateMovement.searchAsns] ZP_PUR_ASN_HEAD metadata fetch warning:', err.message)
       }
+
+      // If active ASNs found, merge with purHeadMap so supplier and company code are always present
+      if (activeAsnList.length > 0) {
+        let results = activeAsnList.map((r) => {
+          const rawId = String(r.Asnnumber || r.AsnNo || r.Asn_No || r.Asnnum || '').trim()
+          const head = purHeadMap.get(rawId) || purHeadMap.get(rawId.replace(/^ASN/i, '')) || {}
+
+          return {
+            asnId: rawId,
+            asnYear: String(new Date().getFullYear()),
+            invoiceNumber: r.Invoice || head.Invoice || head.InvoiceNo || head.Invoice_Num || '',
+            invoiceAmount: parseFloat(r.Invoiceamount || head.Invoiceamount || head.InvoiceAmount || '0') || 0,
+            invoiceValue: parseFloat(r.Invoicevalue || head.Invoicevalue || head.InvoiceAmount || '0') || 0,
+            invoiceDate: r.Invoicedate || head.Invoicedate || head.InvoiceDate || '',
+            companyCode: r.Companycode || r.CompanyCode || head.Companycode || head.CompanyCode || '1810',
+            supplierCode: r.Suppliercode || r.Supplier || head.Suppliercode || head.Supplier || '',
+            supplierName: r.SupplierFullName || r.SupplierName || head.SupplierFullName || head.SupplierName || '',
+            supplierLocation: r.SupplierLocation || r.supplieraddress || head.SupplierLocation || head.supplieraddress || '',
+            purchaseOrder: r.Purchaseorder || head.Purchaseorder || head.PurchaseOrder || '',
+            plant: r.Plant || head.Plant || '',
+            currency: 'INR',
+            isActive: r.Isactive || 'X',
+          }
+        })
+
+        if (search.trim()) {
+          const q = search.trim().toLowerCase()
+          results = results.filter(
+            (a) =>
+              (a.asnId || '').toLowerCase().includes(q) ||
+              (a.invoiceNumber || '').toLowerCase().includes(q) ||
+              (a.purchaseOrder || '').toLowerCase().includes(q) ||
+              (a.supplierCode || '').toLowerCase().includes(q) ||
+              (a.plant || '').toLowerCase().includes(q)
+          )
+        }
+        if (results.length > 0) return results
+      }
+
+      // Fallback: If ZCDS_ACTIVE_ASN was empty, try raw ZP_PUR_ASN_HEAD
+      if (purHeadMap.size > 0) {
+        let results = Array.from(purHeadMap.values()).map((r) => ({
+          asnId: r.Asnnumber || r.AsnNo || r.Asn_No || r.Asnnum || '',
+          asnYear: String(new Date().getFullYear()),
+          invoiceNumber: r.Invoice || r.InvoiceNo || r.Invoice_Num || '',
+          invoiceAmount: parseFloat(r.Invoiceamount || r.InvoiceAmount || '0') || 0,
+          invoiceValue: parseFloat(r.Invoicevalue || r.InvoiceValue || r.Invoiceamount || '0') || 0,
+          invoiceDate: r.Invoicedate || r.InvoiceDate || '',
+          companyCode: r.Companycode || r.CompanyCode || '1810',
+          supplierCode: r.Suppliercode || r.Supplier || '',
+          supplierName: r.SupplierFullName || r.SupplierName || '',
+          supplierLocation: r.SupplierLocation || r.supplieraddress || '',
+          purchaseOrder: r.Purchaseorder || r.PurchaseOrder || '',
+          plant: r.Plant || '',
+          currency: 'INR',
+          isActive: r.Isactive || 'X',
+        }))
+
+        if (search.trim()) {
+          const q = search.trim().toLowerCase()
+          results = results.filter(
+            (a) =>
+              (a.asnId || '').toLowerCase().includes(q) ||
+              (a.invoiceNumber || '').toLowerCase().includes(q) ||
+              (a.purchaseOrder || '').toLowerCase().includes(q) ||
+              (a.supplierCode || '').toLowerCase().includes(q) ||
+              (a.plant || '').toLowerCase().includes(q)
+          )
+        }
+        if (results.length > 0) return results
+      }
+    } catch (err) {
+      console.warn('[CreateMovement.searchAsns] Active ASN fetch error:', err.message)
     }
 
     // Local dev mock fallback
@@ -205,8 +275,8 @@ export const createMovementApi = {
    */
   async postCreateMovementHttp(form) {
     const primaryAsn = form.asnNums?.[0] || {}
-    const companyCode = form.companyCode || primaryAsn.companyCode || ''
-    const supplierCode = authConfig.loginId || primaryAsn.supplierCode || ''
+    const companyCode = form.companyCode || primaryAsn.companyCode || '1810'
+    const supplierCode = String(primaryAsn.supplierCode || form.supplierCode || '').trim()
     const supplierName = form.supplierName || primaryAsn.supplierName || ''
     const supplierLocation = form.supplierLocation || primaryAsn.supplierLocation || ''
 
@@ -370,8 +440,8 @@ export const createMovementApi = {
     }
 
     const primaryAsn = form.asnNums?.[0] || {}
-    const companyCode = form.companyCode || primaryAsn.companyCode || ''
-    const supplierCode = authConfig.loginId || primaryAsn.supplierCode || ''
+    const companyCode = form.companyCode || primaryAsn.companyCode || '1810'
+    const supplierCode = String(primaryAsn.supplierCode || form.supplierCode || '').trim()
     const supplierName = form.supplierName || primaryAsn.supplierName || ''
     const supplierLocation = form.supplierLocation || primaryAsn.supplierLocation || ''
 

@@ -212,7 +212,6 @@ export default function CreateMovement({ editData = null, onBack = null, onNavig
   // Load ASN lookup list
   useEffect(() => {
     if (userLoading) return
-    if (!loginId || !loginType) return
     if (!asnLookupOpen) return
     let cancelled = false
     setAsnLookupLoading(true)
@@ -220,7 +219,7 @@ export default function CreateMovement({ editData = null, onBack = null, onNavig
       .then((data) => { if (!cancelled) { setAsnLookupResults(data); setAsnLookupLoading(false) } })
       .catch((err) => { console.error(err); if (!cancelled) setAsnLookupLoading(false) })
     return () => { cancelled = true }
-  }, [userLoading, loginId, loginType, asnLookupOpen, asnLookupSearch])
+  }, [userLoading, asnLookupOpen, asnLookupSearch])
 
   // Close on Escape
   useEffect(() => {
@@ -338,7 +337,14 @@ const handleSuccessOk = () => {
       isActive: row.isActive || 'X',
     }
 
-    setForm((f) => ({ ...f, asnNums: [...f.asnNums, newAsn] }))
+    setForm((f) => ({
+      ...f,
+      companyCode: f.companyCode || row.companyCode || '1810',
+      supplierCode: f.supplierCode || row.supplierCode || '',
+      supplierName: f.supplierName || row.supplierName || '',
+      supplierLocation: f.supplierLocation || row.supplierLocation || '',
+      asnNums: [...f.asnNums, newAsn],
+    }))
     if (errors.asnNums) setErrors((e) => ({ ...e, asnNums: null }))
 
     setAsnLookupOpen(false)

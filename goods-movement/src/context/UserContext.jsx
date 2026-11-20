@@ -21,7 +21,7 @@ export function UserProvider({ children }) {
     return () => window.removeEventListener('storage', handleStorage)
   }, [])
 
-  const loginId = user?.supplierCode || user?.username || '0000100063'
+  const loginId = user?.supplierCode || user?.username || ''
   const loginType = user?.role === 'Supplier' ? 'S' : (user?.loginType || 'V')
   const role = user?.role || 'Supplier'
 
@@ -38,7 +38,7 @@ export function useUser() {
     const session = readSession()
     return {
       user: session,
-      loginId: session?.supplierCode || session?.username || '0000100063',
+      loginId: session?.supplierCode || session?.username || '',
       loginType: session?.role === 'Supplier' ? 'S' : (session?.loginType || 'V'),
       role: session?.role || 'Supplier',
       loading: false,

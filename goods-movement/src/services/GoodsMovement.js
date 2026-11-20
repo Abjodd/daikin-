@@ -140,6 +140,7 @@ const mapHeadItem = (d) => {
     safetyEquipments: d.SafetyEquipmentFlag ? 'Yes' : 'No',
     safetyGuardForMaterial: d.SafetyGuardFlag ? 'Yes' : 'No',
     totalAsnAmount: parseFloat(d.TotalAsnAmount || '0.00'),
+    ibdNumber: d.IBDnumber || d.IbdNumber || d.IBDNumber || d.ibdNumber || '',
     timeline: buildTimelineFromHead(d),
     asns: [],
   }
@@ -229,12 +230,14 @@ export const goodsMovementApi = {
       const headResult = headData.d?.results?.[0]
       if (headResult) {
         const item = mapHeadItem(headResult)
+        const ibd = headResult.IBDnumber || headResult.IbdNumber || headResult.IBDNumber || headResult.ibdNumber || ''
+        item.ibdNumber = ibd
         if (asnData.d?.results && asnData.d.results.length > 0) {
           item.asns = asnData.d.results.map(a => ({
             asnId: a.AsnNo,
             asnYear: '2026',
             totalLineItems: 1,
-            ibdNumber: '',
+            ibdNumber: a.IBDnumber || a.IbdNumber || ibd || '',
             plant: headResult.Plant || '',
             storageLocation: '',
             invoiceNumber: '',
@@ -441,7 +444,7 @@ export const goodsMovementApi = {
 
     const primaryAsn = tracking.asns?.[0] || {}
     const companyCode = tracking.companyCode || primaryAsn.companyCode || '1810'
-    const supplierCode = tracking.supplierCode || authConfig.loginId || primaryAsn.supplierCode || ''
+    const supplierCode = String(tracking.supplierCode || primaryAsn.supplierCode || '').trim()
     const supplierName = tracking.supplierName || primaryAsn.supplierName || ''
     const supplierLocation = tracking.supplierLocation || primaryAsn.supplierLocation || ''
 
@@ -482,8 +485,9 @@ export const goodsMovementApi = {
 
     console.log('[GoodsMovement.startShipment] Calling ZHTTP_SHIPMENT:', HTTP_SHIPMENT_SRV, payload)
 
+    let res
     try {
-      const res = await fetch(HTTP_SHIPMENT_SRV, {
+      res = await fetch(HTTP_SHIPMENT_SRV, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -506,18 +510,70 @@ export const goodsMovementApi = {
           body: JSON.stringify(payload),
         })
       })
-
-      if (res && !res.ok) {
-        const text = await res.text().catch(() => '')
-        console.warn(`[GoodsMovement.startShipment] HTTP warning (${res.status}):`, text)
-      }
     } catch (httpErr) {
-      console.warn('[GoodsMovement.startShipment] HTTP failed:', httpErr.message)
+      if (import.meta.env.PROD) {
+        throw new Error(`Shipment service unreachable: ${httpErr.message}`)
+      }
     }
 
-    // 2. Persist Status update to OData ZP_TRACKING_HEAD
+    const text = (await res?.text().catch(() => '')) || ''
+    let data = {}
+    try {
+      data = text ? JSON.parse(text) : {}
+    } catch {
+      data = { message: text }
+    }
+    const respData = data.d || data
+    console.log('[GoodsMovement.startShipment] Response from SAP:', respData)
+
+    // Check Type returned from SAP backend
+    const respType = String(
+      respData.Type ||
+      respData.type ||
+      respData.TYPE ||
+      respData.Status ||
+      respData.status ||
+      ''
+    ).trim().toUpperCase()
+
+    const isSuccess = respType === 'S' || respType === 'SUCCESS'
+
+    // If Type is NOT 'S', do NOT update status to 'In Transit'. Keep as 'Yet to Ship' and throw error.
+    if (!isSuccess) {
+      const errorMsg =
+        respData.message ||
+        respData.MESSAGE ||
+        respData.error?.message?.value ||
+        `Backend rejected start shipment (Type: ${respType || 'Error'})`
+      throw new Error(errorMsg)
+    }
+
+    // Extract generated Inbound Delivery (IBD) number from SAP HTTP response
+    const generatedIbd = String(
+      respData.inbounddelivery ||
+      respData.InboundDelivery ||
+      respData.INBOUNDDELIVERY ||
+      respData.inbounddeliveries?.[0] ||
+      respData.InboundDeliveries?.[0] ||
+      respData.ibdnumber ||
+      respData.IBDnumber ||
+      respData.IBDNumber ||
+      ''
+    ).trim()
+
+    console.log('[GoodsMovement.startShipment] Extracted IBD Number:', generatedIbd)
+
+    // 2. ONLY when Type is 'S': Persist Status and IBDnumber update to OData ZP_TRACKING_HEAD
     try {
       const token = await fetchCsrfToken()
+      const headUpdatePayload = {
+        TrackingId: rawTrackNo,
+        Status: 'In Transit',
+      }
+      if (generatedIbd) {
+        headUpdatePayload.IBDnumber = generatedIbd
+      }
+
       await fetch(`${SRV}/ZP_TRACKING_HEAD('${encodeURIComponent(rawTrackNo)}')`, {
         method: 'PATCH',
         headers: {
@@ -526,9 +582,7 @@ export const goodsMovementApi = {
           'X-CSRF-Token': token,
         },
         credentials: 'include',
-        body: JSON.stringify({
-          Status: 'In Transit',
-        }),
+        body: JSON.stringify(headUpdatePayload),
       }).catch(async () => {
         return fetch(`${SRV}/ZP_TRACKING_HEAD('${encodeURIComponent(rawTrackNo)}')`, {
           method: 'MERGE',
@@ -538,11 +592,42 @@ export const goodsMovementApi = {
             'X-CSRF-Token': token,
           },
           credentials: 'include',
-          body: JSON.stringify({
-            Status: 'In Transit',
-          }),
+          body: JSON.stringify(headUpdatePayload),
+        })
+      }).catch(async () => {
+        return fetch(`${SRV}/ZP_TRACKING_HEAD('${encodeURIComponent(rawTrackNo)}')`, {
+          method: 'PUT',
+          headers: {
+            ...getHeaders(),
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': token,
+          },
+          credentials: 'include',
+          body: JSON.stringify(headUpdatePayload),
         })
       })
+
+      // Dual-update ZHTTP_TRACKING with Type 'U' if backend listens on HTTP service for IBD
+      if (generatedIbd) {
+        fetch(`${HTTP_SRV}?sap-client=080`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Loginid: authConfig.loginId,
+            Logintype: authConfig.loginType,
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            type: 'U',
+            Type: 'U',
+            TrackingId: rawTrackNo,
+            IBDnumber: generatedIbd,
+            InboundDelivery: generatedIbd,
+            Status: 'In Transit',
+          }),
+        }).catch((e) => console.warn('ZHTTP_TRACKING Type U update notice:', e))
+      }
     } catch (odataErr) {
       console.warn('[GoodsMovement.startShipment] OData update warning:', odataErr.message)
     }
@@ -552,9 +637,21 @@ export const goodsMovementApi = {
     if (target) {
       target.status = 'In Transit'
       target.statusColor = 'orange'
+      if (generatedIbd) {
+        target.ibdNumber = generatedIbd
+        target.asns?.forEach(a => { a.ibdNumber = generatedIbd })
+      }
     }
 
-    return { success: true, trackingNo: rawTrackNo, message: `Shipment for Tracking ${rawTrackNo} started successfully` }
+    return {
+      success: true,
+      trackingNo: rawTrackNo,
+      type: respType,
+      inboundDelivery: generatedIbd,
+      message: respData.message || (generatedIbd
+        ? `Inbound delivery ${generatedIbd} created successfully for Tracking ${rawTrackNo}`
+        : `Shipment for Tracking ${rawTrackNo} started successfully`),
+    }
   },
 
   /**

@@ -67,6 +67,7 @@ export default function GoodsMovement() {
   const [shipmentLoading, setShipmentLoading] = useState(false)
   const [shipmentModalOpen, setShipmentModalOpen] = useState(false)
   const [shipmentModalMsg, setShipmentModalMsg] = useState('')
+  const [shipmentError, setShipmentError] = useState(null)
 
   // Load tracking list
   useEffect(() => {
@@ -211,12 +212,28 @@ export default function GoodsMovement() {
   const handleStartShipment = async () => {
     if (!tracking || shipmentLoading) return
     setShipmentLoading(true)
+    setShipmentError(null)
     try {
-      await goodsMovementApi.startShipment(tracking)
-      setShipmentModalMsg(`Shipment for Tracking No. ${tracking.id} has been started successfully.`)
+      const result = await goodsMovementApi.startShipment(tracking)
+      if (result?.inboundDelivery) {
+        setTracking((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: 'In Transit',
+                statusColor: 'orange',
+                ibdNumber: result.inboundDelivery,
+                asns: (prev.asns || []).map((a) => ({ ...a, ibdNumber: result.inboundDelivery })),
+              }
+            : prev
+        )
+      }
+      setShipmentModalMsg(
+        result?.message || `Shipment for Tracking No. ${tracking.id} has been started successfully.`
+      )
       setShipmentModalOpen(true)
     } catch (err) {
-      alert(`Failed to start shipment: ${err.message}`)
+      setShipmentError(err.message || 'Failed to start shipment.')
     } finally {
       setShipmentLoading(false)
     }
@@ -629,7 +646,7 @@ export default function GoodsMovement() {
                                 {asn.asnId}
                               </td>
                               <td className="py-3.5 px-4 text-[#334155]">{asn.totalLineItems || 1}</td>
-                              <td className="py-3.5 px-4 text-[#334155]">{asn.ibdNumber || '—'}</td>
+                              <td className="py-3.5 px-4 text-[#334155]">{asn.ibdNumber || tracking.ibdNumber || '—'}</td>
                               <td className="py-3.5 px-4 text-[#334155]">{asn.plant || 'SR01'}</td>
                               <td className="py-3.5 px-4 text-[#334155]">{asn.storageLocation || 'RM02'}</td>
                               <td className="py-3.5 px-4 text-[#334155] font-medium">{asn.invoiceNumber || '—'}</td>
@@ -974,6 +991,32 @@ export default function GoodsMovement() {
                 type="button"
                 onClick={handleShipmentModalConfirm}
                 className="w-full h-10 text-[13.5px] font-semibold text-white bg-[#107e3e] hover:bg-[#0d6632] rounded-lg shadow-sm transition-all cursor-pointer"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* START SHIPMENT ERROR MODAL */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {shipmentError && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6 border border-[#e5e5e5] text-center">
+              <div className="w-14 h-14 rounded-full bg-[#fce8e6] text-[#cc1c14] flex items-center justify-center mx-auto mb-4 shadow-sm">
+                <AlertTriangle size={32} />
+              </div>
+              <h3 className="text-[17px] font-bold text-[#1f2937] mb-2">
+                Could Not Start Shipment
+              </h3>
+              <p className="text-[13.5px] text-[#475569] leading-relaxed mb-6">
+                {shipmentError}
+              </p>
+              <button
+                type="button"
+                onClick={() => setShipmentError(null)}
+                className="w-full h-10 text-[13.5px] font-semibold text-white bg-[#0a6ed1] hover:bg-[#085caf] rounded-lg shadow-sm transition-all cursor-pointer"
               >
                 OK
               </button>
