@@ -323,11 +323,19 @@ const handleSuccessOk = () => {
 
     const newAsn = {
       asnId: row.asnId,
-      asnYear: row.asnYear,
+      asnYear: row.asnYear || '2026',
       invoiceNumber: row.invoiceNumber || '',
       plant: row.plant || '',
+      purchaseOrder: row.purchaseOrder || '',
+      companyCode: row.companyCode || '',
+      supplierCode: row.supplierCode || '',
+      supplierName: row.supplierName || '',
+      supplierLocation: row.supplierLocation || '',
+      invoiceDate: row.invoiceDate || '',
       invoiceAmount: row.invoiceAmount || 0,
-      currency: row.currency || '',
+      invoiceValue: row.invoiceValue || row.invoiceAmount || 0,
+      currency: row.currency || 'INR',
+      isActive: row.isActive || 'X',
     }
 
     setForm((f) => ({ ...f, asnNums: [...f.asnNums, newAsn] }))
@@ -687,7 +695,7 @@ const handleSuccessOk = () => {
                   <thead className="sticky top-0 bg-gradient-to-b from-[#fafbfc] to-[#f5f6f7] border-b border-[#e5e5e5]">
                     <tr className="text-[#6a6d70]">
                       <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider">ASN</th>
-                      <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider">Year</th>
+                      <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider">PO No</th>
                       <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider">Plant</th>
                       <th className="text-left font-semibold py-3 px-4 text-[12px] uppercase tracking-wider">Invoice No</th>
                       <th className="text-right font-semibold py-3 px-4 text-[12px] uppercase tracking-wider">Amount</th>
@@ -706,7 +714,7 @@ const handleSuccessOk = () => {
                             }`}
                         >
                           <td className="py-3 px-4 font-semibold text-[#0a6ed1]">{row.asnId}</td>
-                          <td className="py-3 px-4 text-[#6a6d70]">{row.asnYear}</td>
+                          <td className="py-3 px-4 text-[#6a6d70]">{row.purchaseOrder || row.asnYear || '-'}</td>
                           <td className="py-3 px-4 text-[#32363a] font-medium">{row.plant}</td>
                           <td className="py-3 px-4 text-[#32363a]">{row.invoiceNumber}</td>
                           <td className="py-3 px-4 text-right font-semibold text-[#32363a]">
