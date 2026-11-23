@@ -137,12 +137,58 @@ export const compareTrackings = (a, b, sortBy = 'latest') => {
   return sortBy === 'oldest' ? numA - numB : numB - numA
 }
 
+export const getStatusBadgeStyle = (status) => {
+  const s = String(status || '').toLowerCase().trim()
+
+  // 1. Cancelled -> RED
+  if (s.includes('cancel')) {
+    return {
+      classes: 'bg-[#fef2f2] text-[#cc1c14] border border-[#fecaca]',
+      color: 'red',
+    }
+  }
+
+  // 2. Yet to Ship / Created -> WARM AMBER / ORANGE
+  if (s.includes('yet to ship') || s.includes('created') || s.includes('draft')) {
+    return {
+      classes: 'bg-[#fffbeb] text-[#b45309] border border-[#fde68a]',
+      color: 'amber',
+    }
+  }
+
+  // 3. In Transit / Shipped -> SAP BLUE
+  if (s.includes('transit') || s.includes('shipped')) {
+    return {
+      classes: 'bg-[#eff6ff] text-[#0a6ed1] border border-[#bfdbfe]',
+      color: 'blue',
+    }
+  }
+
+  // 4. Goods Received / Completed -> SAP GREEN
+  if (s.includes('received') || s.includes('completed') || s.includes('delivered')) {
+    return {
+      classes: 'bg-[#ecfdf5] text-[#107e3e] border border-[#a7f3d0]',
+      color: 'green',
+    }
+  }
+
+  // 5. Gate Reporting / Gate Entry -> PURPLE
+  if (s.includes('gate') || s.includes('reporting') || s.includes('entry')) {
+    return {
+      classes: 'bg-[#faf5ff] text-[#7e22ce] border border-[#e9d5ff]',
+      color: 'purple',
+    }
+  }
+
+  // Default fallback -> Slate Gray / Neutral
+  return {
+    classes: 'bg-[#f1f5f9] text-[#475569] border border-[#cbd5e1]',
+    color: 'gray',
+  }
+}
+
 const resolveStatusColor = (statusText) => {
-  const t = String(statusText || '').toLowerCase()
-  if (t.includes('yet to ship') || t.includes('created')) return 'red'
-  if (t.includes('in transit') || t.includes('shipped')) return 'blue'
-  if (t.includes('received') || t.includes('gate') || t.includes('completed')) return 'green'
-  return 'blue'
+  return getStatusBadgeStyle(statusText).color
 }
 
 const buildTimelineFromHead = (head) => {

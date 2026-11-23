@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import PageLayout from '../layouts/PageLayout.jsx'
 import CreateMovement from './createMovement.jsx'
-import { goodsMovementApi, authConfig, compareTrackings } from '../services/GoodsMovement.js'
+import { goodsMovementApi, authConfig, compareTrackings, getStatusBadgeStyle } from '../services/GoodsMovement.js'
 import { useNavigate } from 'react-router-dom'
 import { generateShipmentNote } from '../services/generateShipmentNote.js'
 import { getAsnAppUrl } from '../config/app.js'
@@ -401,7 +401,6 @@ export default function GoodsMovement() {
           <div className="flex-1 overflow-y-auto min-h-0">
             {processedTrackings.map((t) => {
               const isSelected = t.id === selectedId
-              const isRedStatus = String(t.status || '').toLowerCase().includes('yet to ship')
 
               return (
                 <button
@@ -424,11 +423,7 @@ export default function GoodsMovement() {
                   <div className="flex items-center justify-between text-[12px]">
                     <span className="text-[#6a6d70]">Plant: {t.plant}</span>
                     <span
-                      className={`font-semibold px-2 py-0.5 rounded-full text-[11px] ${
-                        isRedStatus
-                          ? 'bg-[#fef2f2] text-[#cc1c14] border border-[#fecaca]'
-                          : 'bg-[#eff6ff] text-[#0a6ed1] border border-[#bfdbfe]'
-                      }`}
+                      className={`font-semibold px-2 py-0.5 rounded-full text-[11px] ${getStatusBadgeStyle(t.status).classes}`}
                     >
                       {t.status}
                     </span>
@@ -578,7 +573,6 @@ export default function GoodsMovement() {
             <div className="flex-1 overflow-y-auto min-h-0">
               {processedTrackings.map((t) => {
                 const isSelected = t.id === selectedId
-                const isRedStatus = String(t.status || '').toLowerCase().includes('yet to ship')
 
                 return (
                   <button
@@ -598,11 +592,7 @@ export default function GoodsMovement() {
                     <div className="flex items-center justify-between text-[12px]">
                       <span className="text-[#6a6d70]">Plant: {t.plant}</span>
                       <span
-                        className={`font-semibold px-2 py-0.5 rounded-full text-[11px] ${
-                          isRedStatus
-                            ? 'bg-[#fef2f2] text-[#cc1c14] border border-[#fecaca]'
-                            : 'bg-[#eff6ff] text-[#0a6ed1] border border-[#bfdbfe]'
-                        }`}
+                        className={`font-semibold px-2 py-0.5 rounded-full text-[11px] ${getStatusBadgeStyle(t.status).classes}`}
                       >
                         {t.status}
                       </span>
@@ -657,11 +647,7 @@ export default function GoodsMovement() {
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       <span
-                        className={`px-2.5 py-0.5 rounded-full text-[11.5px] font-bold border ${
-                          isYetToShip
-                            ? 'bg-[#fef2f2] text-[#cc1c14] border-[#fecaca]'
-                            : 'bg-[#eff6ff] text-[#0a6ed1] border-[#bfdbfe]'
-                        }`}
+                        className={`px-2.5 py-0.5 rounded-full text-[11.5px] font-bold ${getStatusBadgeStyle(tracking.status).classes}`}
                       >
                         {tracking.status}
                       </span>
@@ -1275,7 +1261,7 @@ export default function GoodsMovement() {
                       {tracking.id}
                     </span>
                   </div>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#fef2f2] text-[#cc1c14] border border-[#fecaca]">
+                  <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${getStatusBadgeStyle(tracking.status || 'Yet to Ship').classes}`}>
                     {tracking.status || 'Yet to Ship'}
                   </span>
                 </div>
