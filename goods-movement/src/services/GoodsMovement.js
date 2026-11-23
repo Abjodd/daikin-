@@ -298,17 +298,47 @@ export const goodsMovementApi = {
         const ibd = headResult.IBDnumber || headResult.IbdNumber || headResult.IBDNumber || headResult.ibdNumber || ''
         item.ibdNumber = ibd
         if (asnData.d?.results && asnData.d.results.length > 0) {
-          item.asns = asnData.d.results.map(a => ({
-            asnId: a.AsnNo,
-            asnYear: '2026',
-            totalLineItems: 1,
-            ibdNumber: a.IBDnumber || a.IbdNumber || ibd || '',
-            plant: headResult.Plant || '',
-            storageLocation: '',
-            invoiceNumber: '',
-            invoiceAmount: 0,
-            invoiceDate: fromSapDateDisplay(headResult.EwayBillDate) || '',
-          }))
+          const asnList = asnData.d.results
+          const purMetaMap = new Map()
+
+          try {
+            const asnFilter = asnList
+              .map(a => `Asnnumber eq '${a.AsnNo}' or Asnnumber eq '${String(a.AsnNo || '').replace(/^0+/, '')}'`)
+              .join(' or ')
+            const purRes = await fetch(`${ASN_ODATA_SRV}/ZP_PUR_ASN_HEAD?$filter=${encodeURIComponent(asnFilter)}&$format=json`, {
+              headers: getHeaders(),
+              credentials: 'include',
+            })
+            if (purRes.ok) {
+              const purData = await purRes.json()
+              for (const p of (purData.d?.results || [])) {
+                const pNum = String(p.Asnnumber || p.Asn_No || p.Asnnum || '').trim()
+                if (pNum) {
+                  purMetaMap.set(pNum, p)
+                  purMetaMap.set(pNum.replace(/^0+/, ''), p)
+                  purMetaMap.set(pNum.padStart(10, '0'), p)
+                }
+              }
+            }
+          } catch (pErr) {
+            console.warn('[GoodsMovement.getTracking] ASN metadata lookup notice:', pErr.message)
+          }
+
+          item.asns = asnList.map(a => {
+            const rawAsn = String(a.AsnNo || '').trim()
+            const meta = purMetaMap.get(rawAsn) || purMetaMap.get(rawAsn.replace(/^0+/, '')) || {}
+            return {
+              asnId: rawAsn,
+              asnYear: '2026',
+              totalLineItems: meta.TotLines || meta.TotalLineItems || '',
+              ibdNumber: a.IBDnumber || a.IbdNumber || ibd || '',
+              plant: meta.Plant || headResult.Plant || '',
+              storageLocation: meta.Storageloc || meta.Lgort || meta.StorageLocation || '',
+              invoiceNumber: meta.Invoice || meta.InvoiceNo || meta.Invoice_Num || '',
+              invoiceAmount: meta.Invoiceamount || meta.InvoiceAmount || '',
+              invoiceDate: fromSapDateDisplay(meta.Invoicedate || meta.InvoiceDate || headResult.EwayBillDate) || '',
+            }
+          })
         }
         return item
       }

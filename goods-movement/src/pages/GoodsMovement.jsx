@@ -65,6 +65,7 @@ export default function GoodsMovement() {
 
   // Start Shipment State
   const [shipmentLoading, setShipmentLoading] = useState(false)
+  const [confirmShipmentOpen, setConfirmShipmentOpen] = useState(false)
   const [shipmentModalOpen, setShipmentModalOpen] = useState(false)
   const [shipmentModalMsg, setShipmentModalMsg] = useState('')
   const [shipmentError, setShipmentError] = useState(null)
@@ -151,9 +152,9 @@ export default function GoodsMovement() {
   const handleOpenEditDetails = () => {
     if (!tracking) return
     setEditForm({
-      asn: tracking.asns?.[0]?.asnId || '2600000243',
-      vehicleNumber: tracking.vehicleRegNo || tracking.vehicleNo || 'xfgb',
-      invoiceNumber: tracking.asns?.[0]?.invoiceNumber || 'YYYYY2026',
+      asn: tracking.asns?.[0]?.asnId || '',
+      vehicleNumber: tracking.vehicleRegNo || tracking.vehicleNo || '',
+      invoiceNumber: tracking.asns?.[0]?.invoiceNumber || '',
     })
     setEditModalOpen(true)
   }
@@ -190,10 +191,10 @@ export default function GoodsMovement() {
         invoiceNumber: editForm.invoiceNumber,
         companyCode: tracking.companyCode,
         supplierCode: tracking.supplier,
-        plant: tracking.asns?.[0]?.plant || 'SR01',
-        invoiceDate: tracking.asns?.[0]?.invoiceDate || 'Nov 13, 2026',
-        invoiceAmount: tracking.asns?.[0]?.invoiceAmount || 12.0,
-        invoiceValue: tracking.asns?.[0]?.invoiceValue || 12.0,
+        plant: tracking.asns?.[0]?.plant || '',
+        invoiceDate: tracking.asns?.[0]?.invoiceDate || '',
+        invoiceAmount: tracking.asns?.[0]?.invoiceAmount || 0,
+        invoiceValue: tracking.asns?.[0]?.invoiceValue || 0,
       })
       setEditModalOpen(false)
       setEditSuccessMsg('Tracking details updated successfully')
@@ -269,8 +270,10 @@ export default function GoodsMovement() {
       setShipmentModalMsg(
         result?.message || `Shipment for Tracking No. ${tracking.id} has been started successfully.`
       )
+      setConfirmShipmentOpen(false)
       setShipmentModalOpen(true)
     } catch (err) {
+      setConfirmShipmentOpen(false)
       setShipmentError(err.message || 'Failed to start shipment.')
     } finally {
       setShipmentLoading(false)
@@ -762,7 +765,11 @@ export default function GoodsMovement() {
                   {/* Tab 3: Edit Details */}
                   <button
                     type="button"
-                    onClick={handleOpenEditDetails}
+                    onClick={() => {
+                      if (!tracking) return
+                      setEditTrackingData(tracking)
+                      setShowCreateMovement(true)
+                    }}
                     className="flex flex-col items-center pb-2.5 border-b-2 border-transparent hover:border-[#d9d9d9] transition-all cursor-pointer flex-shrink-0"
                   >
                     <div className="w-10 h-10 rounded-full flex items-center justify-center mb-1.5 bg-[#e7f6f0] text-[#107e3e] shadow-sm hover:scale-105 transition-transform">
@@ -882,13 +889,17 @@ export default function GoodsMovement() {
                               >
                                 {asn.asnId}
                               </td>
-                              <td className="py-3.5 px-4 text-[#334155]">{asn.totalLineItems || 1}</td>
+                              <td className="py-3.5 px-4 text-[#334155]">{asn.totalLineItems ? asn.totalLineItems : '—'}</td>
                               <td className="py-3.5 px-4 text-[#334155] font-semibold text-[#0f2d59]">{asn.ibdNumber || tracking.ibdNumber || '—'}</td>
-                              <td className="py-3.5 px-4 text-[#334155]">{asn.plant || 'SR01'}</td>
-                              <td className="py-3.5 px-4 text-[#334155]">{asn.storageLocation || 'RM02'}</td>
+                              <td className="py-3.5 px-4 text-[#334155]">{asn.plant || '—'}</td>
+                              <td className="py-3.5 px-4 text-[#334155]">{asn.storageLocation || '—'}</td>
                               <td className="py-3.5 px-4 text-[#334155] font-medium">{asn.invoiceNumber || '—'}</td>
-                              <td className="py-3.5 px-4 text-[#334155]">{asn.invoiceAmount || 12}</td>
-                              <td className="py-3.5 px-4 text-[#334155]">{asn.invoiceDate || 'Nov 13, 2026'}</td>
+                              <td className="py-3.5 px-4 text-[#334155]">
+                                {asn.invoiceAmount !== undefined && asn.invoiceAmount !== null && String(asn.invoiceAmount).trim() !== ''
+                                  ? (isNaN(Number(asn.invoiceAmount)) ? asn.invoiceAmount : Number(asn.invoiceAmount).toFixed(2))
+                                  : '—'}
+                              </td>
+                              <td className="py-3.5 px-4 text-[#334155]">{asn.invoiceDate || '—'}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -918,7 +929,10 @@ export default function GoodsMovement() {
                       <button
                         type="button"
                         disabled={shipmentLoading}
-                        onClick={handleStartShipment}
+                        onClick={() => {
+                          setShipmentError(null)
+                          setConfirmShipmentOpen(true)
+                        }}
                         className="flex items-center gap-2 px-4 h-9 text-[13px] font-semibold text-white bg-[#107e3e] hover:bg-[#0d6632] rounded-lg shadow-sm transition-all disabled:opacity-60 cursor-pointer"
                       >
                         {shipmentLoading ? (
@@ -1211,6 +1225,161 @@ export default function GoodsMovement() {
                     </button>
                   </>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* START SHIPMENT CONFIRMATION MODAL */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {confirmShipmentOpen && tracking && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-fade-in">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-[450px] border border-[#e5e5e5] overflow-hidden animate-scale">
+              {/* Header */}
+              <div className="px-5 py-3.5 bg-[#f8fafc] border-b border-[#e2e8f0] flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#eff6ff] text-[#0a6ed1] flex items-center justify-center border border-[#bfdbfe]">
+                    <Truck size={17} />
+                  </div>
+                  <div>
+                    <h3 className="text-[14px] font-bold text-[#0f2d59] leading-tight">
+                      Confirm Start Shipment
+                    </h3>
+                    <p className="text-[11px] text-[#64748b]">
+                      Inbound Delivery (IBD) will be created in SAP
+                    </p>
+                  </div>
+                </div>
+                {!shipmentLoading && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmShipmentOpen(false)}
+                    className="text-[#64748b] hover:text-[#1f2937] p-1 rounded-lg transition-colors cursor-pointer"
+                    title="Close"
+                  >
+                    <X size={17} />
+                  </button>
+                )}
+              </div>
+
+              {/* Body */}
+              <div className="p-4 space-y-3">
+                {/* Tracking ID & Status Banner */}
+                <div className="flex items-center justify-between px-3 py-2 bg-[#f1f5f9] rounded-lg border border-[#e2e8f0]">
+                  <div>
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-[#64748b]">
+                      Tracking Number
+                    </span>
+                    <span className="text-[14px] font-extrabold text-[#0f2d59]">
+                      {tracking.id}
+                    </span>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-[#fef2f2] text-[#cc1c14] border border-[#fecaca]">
+                    {tracking.status || 'Yet to Ship'}
+                  </span>
+                </div>
+
+                {/* Shipment Details 2-Column Grid */}
+                <div className="bg-white rounded-lg border border-[#e2e8f0] p-3 text-[11.5px] leading-relaxed">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                    <div className="min-w-0">
+                      <span className="text-[#64748b] block text-[10.5px]">Transporter</span>
+                      <span className="font-semibold text-[#1e293b] truncate block" title={tracking.transporter || '—'}>
+                        {tracking.transporter || '—'}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[#64748b] block text-[10.5px]">Mode of Transport</span>
+                      <span className="font-semibold text-[#1e293b] truncate block">
+                        {tracking.transportationMode || tracking.transportMode || 'By Road'}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[#64748b] block text-[10.5px]">Vehicle / Docket</span>
+                      <span className="font-semibold text-[#1e293b] truncate block" title={tracking.vehicleRegNo || '—'}>
+                        {tracking.vehicleRegNo || '—'}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[#64748b] block text-[10.5px]">Driver Name</span>
+                      <span className="font-semibold text-[#1e293b] truncate block" title={tracking.driverName || '—'}>
+                        {tracking.driverName || '—'}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[#64748b] block text-[10.5px]">Contact Number</span>
+                      <span className="font-semibold text-[#1e293b] truncate block">
+                        {tracking.contact || '—'}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[#64748b] block text-[10.5px]">Total Amount (INR)</span>
+                      <span className="font-semibold text-[#1e293b] truncate block">
+                        {tracking.totalAsnAmount ? Number(tracking.totalAsnAmount).toFixed(2) : '0.00'}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[#64748b] block text-[10.5px]">E-Way Bill No</span>
+                      <span className="font-semibold text-[#1e293b] truncate block" title={tracking.ewayBillNo || '—'}>
+                        {tracking.ewayBillNo || '—'}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[#64748b] block text-[10.5px]">E-Way Bill Date</span>
+                      <span className="font-semibold text-[#1e293b] truncate block">
+                        {tracking.ewayBillDate || '—'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Associated ASNs strip */}
+                  {tracking.asns && tracking.asns.length > 0 && (
+                    <div className="mt-2.5 pt-2 border-t border-[#f1f5f9] flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10.5px] text-[#64748b] font-medium">Associated ASNs:</span>
+                      {tracking.asns.map((a, i) => (
+                        <span key={i} className="px-1.5 py-0.5 rounded bg-[#eff6ff] text-[#0a6ed1] font-semibold text-[11px] border border-[#bfdbfe]/60">
+                          {a.asnId}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {shipmentError && (
+                  <div className="p-2.5 bg-[#fef2f2] border border-[#fecaca] rounded-lg text-[11.5px] text-[#cc1c14] flex items-start gap-1.5">
+                    <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                    <span>{shipmentError}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer Actions */}
+              <div className="px-5 py-3 bg-[#f8fafc] border-t border-[#e2e8f0] flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={shipmentLoading}
+                  onClick={() => setConfirmShipmentOpen(false)}
+                  className="px-3.5 py-1.5 text-[12px] font-semibold text-[#475569] hover:bg-[#f1f5f9] rounded-lg transition-all cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={shipmentLoading}
+                  onClick={handleStartShipment}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-[12px] font-semibold text-white bg-[#107e3e] hover:bg-[#0d6632] rounded-lg shadow-sm transition-all disabled:opacity-60 cursor-pointer"
+                >
+                  {shipmentLoading ? (
+                    <>
+                      <RefreshCw size={13} className="animate-spin" /> Starting...
+                    </>
+                  ) : (
+                    <>
+                      <PlayCircle size={14} /> Confirm & Start Shipment
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           </div>
