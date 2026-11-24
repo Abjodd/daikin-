@@ -96,6 +96,7 @@ export async function generatePartTags(tags = []) {
         const supplierCode = tag.supplierCode || ''
         const supplierName = tag.supplierName || ''
         const plant = tag.plant || ''
+        const storageLocation = tag.storageLocation || ''
         const plantDesc = tag.plantDesc || ''
         const boxNo = tag.boxNo || '1'
         const totalBoxes = tag.totalBoxes || '1'
@@ -143,23 +144,34 @@ export async function generatePartTags(tags = []) {
         const barcodeImg = barcodeDataUrl(barcodeValue, { width: 2, height: 50 })
         if (barcodeImg) doc.addImage(barcodeImg, 'PNG', MX, offsetY + 40, 50, 12)
 
-        setFont('bold', 10); doc.text(`Plant : ${plant}`, RX, offsetY + 50, { align: 'right' })
+        // setFont('bold', 10); doc.text(`Plant : ${plant}`, RX, offsetY + 50, { align: 'right' })
 
-        setFont('bold', 7); doc.text('PART TAG', LX, offsetY + 58)
+        // setFont('bold', 7); doc.text('PART TAG', LX, offsetY + 58)
+        setFont('bold', 10)
+// doc.text(`Plant : ${plant}`, RX, offsetY + 50, { align: 'right' })
+const plantText = plantDesc
+    ? `Plant : ${plant} (${plantDesc})`
+    : `Plant : ${plant}`
+
+doc.text(plantText, RX, offsetY + 50, { align: 'right' })
+setFont('bold', 8)
+doc.text(`STORAGE LOCATION : ${storageLocation}`, RX, offsetY + 54, { align: 'right' })
 
         // Print DEMO in bold (replaces FIEM)
         setFont('bold', 14)
         doc.text('DEMO', MX, offsetY + 60)
 
         setFont('normal', 7.5)
-        doc.text(`ISSUE DATE- ${issueDate}`, RX, offsetY + 55, { align: 'right' })
-        doc.text(`EXPIRY DATE- ${expiryDate}`, RX, offsetY + 59, { align: 'right' })
+        // doc.text(`ISSUE DATE- ${issueDate}`, RX, offsetY + 55, { align: 'right' })
+        // doc.text(`EXPIRY DATE- ${expiryDate}`, RX, offsetY + 59, { align: 'right' })
+        doc.text(`ISSUE DATE- ${issueDate}`, RX, offsetY + 59, { align: 'right' })
+doc.text(`EXPIRY DATE- ${expiryDate}`, RX, offsetY + 63, { align: 'right' })
 
-        if (plantDesc) {
-            setFont('normal', 5.5)
-            const truncatedPlantDesc = truncate(plantDesc, tagW - 53 - 8)
-            doc.text(truncatedPlantDesc, RX, offsetY + 63, { align: 'right' })
-        }
+        // if (plantDesc) {
+        //     setFont('normal', 5.5)
+        //     const truncatedPlantDesc = truncate(plantDesc, tagW - 53 - 8)
+        //     doc.text(truncatedPlantDesc, RX, offsetY + 63, { align: 'right' })
+        // }
     }
 
     return doc

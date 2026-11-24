@@ -40,6 +40,51 @@ const TRANS_MODE = { '01': 'By Road', '02': 'By Air', '03': 'By Ship', '04': 'By
 const num = (v) => Number(String(v ?? '').trim() || 0)
 const str = (v) => String(v ?? '').trim()
 
+const _poPlantCache = new Map()
+
+async function getPurchaseOrderPlant(poNo) {
+  const po = str(poNo)
+  if (!po) return null
+
+  if (_poPlantCache.has(po)) {
+    return _poPlantCache.get(po)
+  }
+
+  try {
+    const filter = encodeURIComponent(`PurchaseOrder eq '${po}'`)
+
+    const json = await odataGet(
+      `/ZCDS_PURCHASEITEM?$filter=${filter}&$select=PurchaseOrder,Plant,Plantname&$format=json`
+    )
+
+    const results = json.d?.results || []
+    const plantMap = new Map()
+
+    results.forEach(row => {
+      const plant = str(row.Plant)
+      const plantName = str(row.Plantname)
+
+      if (plant || plantName) {
+        plantMap.set(plant || plantName, {
+          plant,
+          plantName: plantName || plant,
+        })
+      }
+    })
+
+    // Don't guess if a PO contains multiple plants
+    const plants = [...plantMap.values()]
+    const result = plants.length === 1 ? plants[0] : null
+
+    _poPlantCache.set(po, result)
+    return result
+  } catch (err) {
+    console.warn(`[ASN] Could not resolve plant for PO ${po}:`, err)
+    return null
+  }
+}
+
+
 export function formatSapDate(v) {
   if (!v) return ''
   const s = String(v).trim()
@@ -197,7 +242,8 @@ function mapItem(d) {
     material: str(d.Materialname || d.Mat_txt || d.Material),
     materialCode: str(d.Material),
     deliveryDate: formatSapDate(d.Shipmentdate || d.Delv_dt),
-    storageLocation: str(d.Storageloc || d.Lgort || 'RM02'),
+    // storageLocation: str(d.Storageloc || d.Lgort || 'RM02'),
+    storageLocation: str(d.Storageloc || d.Lgort || ''),
     poQty: num(d.Poqty),
     confirmedQty: num(d.Confirmedqty),
     deliveredQty: num(d.Deliveredqty),
@@ -216,10 +262,10 @@ function mapItem(d) {
     quantity: qty,
     unit: str(d.Unit) || 'NO',
     amount: calculatedAmt > 0 ? calculatedAmt : num(d.Netprice),
-    hsnSac: str(d.HsnCode) || '84159000',
-    igst: num(d.Tot_igst),
-    cgst: num(d.Tot_cgst),
-    sgstUtgst: num(d.Tot_sgst),
+    hsnSac: str(d.Hsncode || d.HsnCode),            // remove the fake '84159000' fallback
+    igst:   num(d.Igst ?? d.igst),
+    cgst:   num(d.Cgst ?? d.cgst),
+    sgstUtgst: num(d.Sgst ?? d.sgst),
     // Raw attachment attributes on this item
     attachmentId: str(d.AttachmentId),
     filename: str(d.Filename),
@@ -295,6 +341,7 @@ export function buildPartTag(asn, item, opts = {}) {
     supplierName: asn.vendor || '',
     plant: asn.plant,
     plantDesc: asn.plantName || '',
+    storageLocation: item?.storageLocation || '',
     boxNo,
     totalBoxes,
     delDate: item?.deliveryDate || '',
@@ -383,6 +430,43 @@ export const asnApi = {
       }))
     }
 
+// Resolve missing plant information from the PO item CDS
+const poNumbers = [
+  ...new Set(
+    rows
+      .filter(r => r.purchaseOrder && (!r.plant || !r.plantName))
+      .map(r => r.purchaseOrder)
+  )
+]
+
+await Promise.all(
+  poNumbers.map(async po => {
+    const info = await getPurchaseOrderPlant(po)
+    if (!info) return
+
+    rows
+      .filter(r => r.purchaseOrder === po)
+      .forEach(r => {
+        if (!r.plant && info.plant) {
+          r.plant = info.plant
+        }
+
+        if (
+          (!r.plantName || r.plantName.startsWith('Plant (')) &&
+          (!info.plant || info.plant === r.plant)
+        ) {
+          r.plantName = info.plantName
+        }
+
+        r.generalData = {
+          ...r.generalData,
+          plant: r.plant,
+          plantName: r.plantName,
+        }
+      })
+  })
+)
+
     // Cache all rows so each unique item can be selected individually without collisions
     rows.forEach(r => _cachedAsns.set(r.id, r))
 
@@ -401,11 +485,31 @@ export const asnApi = {
       )
     }
 
-    if (plants.length) {
-      rows = rows.filter(a => plants.includes(a.plant))
-    }
+    // if (plants.length) {
+    //   rows = rows.filter(a => plants.includes(a.plant))
+    // }
 
-    return rows
+    // return rows
+    if (plants.length) {
+  rows = rows.filter(a => plants.includes(a.plant))
+}
+
+// Sort ASN numbers in descending order
+rows.sort((a, b) => {
+  const asnA = String(a.asnNum || '').trim()
+  const asnB = String(b.asnNum || '').trim()
+
+  if (!asnA && !asnB) return 0
+  if (!asnA) return 1
+  if (!asnB) return -1
+
+  return asnB.localeCompare(asnA, undefined, {
+    numeric: true,
+    sensitivity: 'base'
+  })
+})
+
+return rows
   },
 
   /**
@@ -502,6 +606,32 @@ export const asnApi = {
       }
     }
 
+// Resolve plant for the selected ASN using its Purchase Order
+if (
+  headerObj?.purchaseOrder &&
+  (!headerObj.plant || !headerObj.plantName)
+) {
+  const plantInfo = await getPurchaseOrderPlant(
+    headerObj.purchaseOrder
+  )
+
+  if (plantInfo) {
+    if (!headerObj.plant) {
+      headerObj.plant = plantInfo.plant
+    }
+
+    if (!headerObj.plantName) {
+      headerObj.plantName = plantInfo.plantName
+    }
+
+    headerObj.generalData = {
+      ...headerObj.generalData,
+      plant: headerObj.plant,
+      plantName: headerObj.plantName,
+    }
+  }
+}
+
     headerObj.items = itemRows
 
     // 3. Extract attachments from item rows
@@ -523,18 +653,18 @@ export const asnApi = {
       ]
     }
 
-    // 4. Compute Tax Summary
-    const baseTotal = itemRows.reduce((acc, it) => acc + (it.amount || 0), 0)
-    const totalWithTaxes = headerObj.amount || baseTotal
-    const taxDiff = Math.max(0, totalWithTaxes - (headerObj.invoiceValue || baseTotal))
+        // 4. Compute Tax Summary from item rows
+    const sum = (k) => itemRows.reduce((acc, it) => acc + (Number(it[k]) || 0), 0)
+    const baseTotal = sum('amount')
+    const igst = sum('igst')
+    const cgst = sum('cgst')
+    const sgstUtgst = sum('sgstUtgst')
 
     headerObj.taxSummary = {
-      taxableValue: headerObj.invoiceValue || baseTotal,
-      igst: 0,
-      cgst: taxDiff / 2,
-      sgstUtgst: taxDiff / 2,
+      taxableValue: baseTotal,
+      igst, cgst, sgstUtgst,
       unPlannedCost: 0,
-      totalAmount: totalWithTaxes,
+      totalAmount: baseTotal + igst + cgst + sgstUtgst,
     }
 
     return headerObj

@@ -30,8 +30,10 @@ export const toStandardIso = (s) => {
 }
 
 // ─── BUTTON LOGIC ──────────────────────────────────────────────
-const isConfirmedItem = (i) => i.status === 'Confirmed' || i.status === 'Partially Confirmed'
-const asnDisabled = (items = []) => !items.some(isConfirmedItem)
+// Create ASN is enabled only while at least one CONFIRMED line still has ASN quantity left.
+// eligibleAsnCount is computed from persisted SAP data (ZP_PO_CONFIRM + ZP_PUR_ASN_ITEM) in getPoDetail,
+// so it is correct after refresh and drops to 0 once every eligible line has been processed.
+const asnDisabled = (agreement) => !agreement || !(agreement.eligibleAsnCount > 0)
 const canConfirm = (items = []) =>
   items.length > 0 &&
   items.some(i => i.status === 'Partially Confirmed' || i.status === 'Confirmation Required')
@@ -158,10 +160,13 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
   const [error,          setError]          = useState(null)
   const [selected,       setSelected]       = useState(new Set())
   const [submitting,     setSubmitting]     = useState(false)
-  const [submitted,      setSubmitted]      = useState(false)
+  const [result,         setResult]         = useState(null)   // { asnNum, fisYear, count } — set ONLY after ZP_PO_CONFIRM was saved
+  const [partial,        setPartial]        = useState(null)   // ASN created, ZP_PO_CONFIRM save incomplete
   const [confirmModal,   setConfirmModal]   = useState(false)
   const [materialFilter, setMaterialFilter] = useState('')
+  const submitLock = useRef(false)
 
+  // All lines are loaded on open and on "Go". No date filter is sent or applied here.
   const fetchData = async () => {
     setLoading(true); setError(null)
     try {
@@ -201,30 +206,43 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
     setSelected(s)
   }
 
-  const handleSubmitClick = () => { if (selected.size === 0) return; setConfirmModal(true) }
-  const handleSubmit = async () => {
-    setConfirmModal(false); setSubmitting(true)
+  const handleSubmitClick = () => { if (selected.size === 0 || submitting) return; setConfirmModal(true) }
+
+  // ZHTTP_ASN_CREATE (STATUS must be SUCCESS) → ZP_PO_CONFIRM happens inside purchaseOrderApi.submitConfirm.
+  // The success popup is shown only after ZP_PO_CONFIRM was written for every selected line.
+  const runConfirm = async (rowsToSend, resume = null) => {
+    if (submitLock.current) return              // synchronous guard against repeated clicks
+    submitLock.current = true
+    setSubmitting(true); setError(null)
     try {
-      const selectedRows = filteredRows.filter((r, idx) => selected.has(String(idx)) && !r.alreadyConfirmed)
-      await purchaseOrderApi.submitConfirm(agreement.id, selectedRows, agreement.vendorNo)
-      setSubmitted(true)
-    } catch (e) { setError(e.message) }
-    finally { setSubmitting(false) }
+      const res = (await purchaseOrderApi.submitConfirm(
+        agreement.id, rowsToSend, agreement.vendorNo, agreement, resume
+      )) || {}
+      const failed = res.failed || []
+      await fetchData()                         // re-read persisted state from SAP
+      if (failed.length) {
+        setPartial({ asnNum: res.asnNum, fisYear: res.fisYear, failedRows: failed.flatMap(f => f.rows) })
+        const asnTxt = res.asnNum ? `ASN ${res.asnNum}${res.fisYear ? '/' + res.fisYear : ''}` : 'The ASN request'
+        setError(`${asnTxt} succeeded, but item(s) ${failed.map(f => f.itemNo).join(', ')} could not be saved in SAP (${failed[0].error}). Use "Retry saving" — do not submit again.`)
+      } else {
+        setPartial(null)
+        setResult({ asnNum: res.asnNum, fisYear: res.fisYear, count: res.confirmedCount ?? rowsToSend.length })
+      }
+    } catch (e) {
+      setError(e.message)                       // ZHTTP failed / STATUS not SUCCESS → nothing was persisted
+    } finally {
+      submitLock.current = false
+      setSubmitting(false)
+    }
   }
 
-  if (submitted) return (
-    <div className="flex flex-col items-center justify-center h-64 gap-4 anim-fade">
-      <div className="w-14 h-14 rounded-full bg-[#e8f5e9] flex items-center justify-center">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2e7d32" strokeWidth="2.5">
-          <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-        </svg>
-      </div>
-      <div className="text-[16px] font-semibold text-[#2e7d32]">Confirmed successfully</div>
-      <button onClick={onSuccess} className="px-5 h-10 text-[14px] font-semibold text-[#0a6ed1] bg-[#ebf5ff] rounded-lg hover:bg-[#d9ecff] transition-all">
-        ← Back to Purchase Order
-      </button>
-    </div>
-  )
+  const handleSubmit = () => {
+    setConfirmModal(false)
+    runConfirm(filteredRows.filter((r, idx) => selected.has(String(idx)) && !r.alreadyConfirmed))
+  }
+
+  const handleRetry = () =>
+    partial && runConfirm(partial.failedRows, { asnNum: partial.asnNum, fisYear: partial.fisYear })
 
   return (
     <main className="bg-white anim-fade" style={{ minHeight: 'calc(100vh - 120px)' }}>
@@ -257,7 +275,7 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
               </svg>
             </div>
           </div>
-          <button onClick={fetchData} disabled={loading}
+          <button onClick={fetchData} disabled={loading || submitting}
             className="h-9 px-5 text-[13px] font-semibold text-white bg-[#0a6ed1] rounded-lg hover:bg-[#085caf] transition-all shadow-sm disabled:opacity-50 flex items-center gap-2">
             {loading && <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"/>}
             Go
@@ -268,9 +286,15 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
         </div>
         {error && (
           <div className="mt-3 flex items-center gap-2 text-[13px] text-[#cc1c14] bg-[#fce8e6] px-3 py-2 rounded-lg">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
             {error}
           </div>
+        )}
+        {partial && (
+          <button onClick={handleRetry} disabled={submitting}
+            className="mt-2 h-9 px-4 text-[13px] font-semibold text-white bg-[#0a6ed1] rounded-lg disabled:opacity-50">
+            Retry saving
+          </button>
         )}
       </div>
 
@@ -353,15 +377,39 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
             </div>
             <div className="px-6 py-4 border-t border-[#e5e5e5] flex justify-end gap-2 bg-[#fafbfc]">
               <button onClick={() => setConfirmModal(false)} className="h-10 px-5 text-[14px] font-semibold text-[#32363a] bg-white border border-[#d9d9d9] rounded-lg hover:bg-[#f5f6f7] transition-all">Cancel</button>
-              <button onClick={handleSubmit} className="h-10 px-5 text-[14px] font-semibold text-white bg-[#0a6ed1] rounded-lg hover:bg-[#085caf] transition-all shadow-md">OK</button>
+              <button onClick={handleSubmit} disabled={submitting} className="h-10 px-5 text-[14px] font-semibold text-white bg-[#0a6ed1] rounded-lg hover:bg-[#085caf] transition-all shadow-md disabled:opacity-50">OK</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success popup — rendered only after the lines were saved in ZP_PO_CONFIRM */}
+      {result && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-3"
+          style={{ background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(2px)' }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[420px] p-6 text-center">
+            <div className="w-14 h-14 rounded-full bg-[#e8f5e9] flex items-center justify-center mx-auto mb-3">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2e7d32" strokeWidth="2.5">
+                <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+              </svg>
+            </div>
+            <div className="text-[16px] font-semibold text-[#2e7d32]">Confirmed successfully</div>
+            <div className="text-[13.5px] text-[#6a6d70] mt-1">
+              {result.asnNum && (
+                <>ASN No. <strong className="text-[#0a6ed1]">{result.asnNum}{result.fisYear ? '/' + result.fisYear : ''}</strong>{' '}</>
+              )}
+              {result.count} line{result.count !== 1 ? 's' : ''} confirmed and saved in SAP.
+            </div>
+            <button onClick={onSuccess} className="mt-5 px-6 h-10 text-[14px] font-semibold text-white bg-[#0a6ed1] rounded-lg hover:bg-[#085caf] transition-all shadow-md">
+              OK
+            </button>
           </div>
         </div>
       )}
 
       <div className="px-4 sm:px-6 lg:px-10 py-4 border-t border-[#e5e5e5] flex items-center justify-between bg-white shadow-[0_-2px_8px_rgba(0,0,0,0.04)]">
         <span className="text-[13px] text-[#6a6d70]">{selected.size} of {selectableIdx.length} selectable</span>
-        <button onClick={handleSubmitClick} disabled={selected.size === 0 || submitting}
+        <button onClick={handleSubmitClick} disabled={selected.size === 0 || submitting || !!partial || !!result}
           className="flex items-center gap-2 px-6 h-10 text-[14px] font-semibold text-white bg-[#0a6ed1] rounded-lg hover:bg-[#085caf] transition-all shadow-md disabled:opacity-40 disabled:cursor-not-allowed">
           {submitting && <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin"/>}
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -405,7 +453,7 @@ function SidebarContent({
                 <div className="text-[10px] uppercase font-bold text-[#0a6ed1]/70 mb-0.5">Supplier Filter</div>
                 <div className="text-[13px] font-semibold text-[#0a6ed1]">{activeSupplier}</div>
               </div>
-              <button 
+              <button
                 onClick={handleChangeSupplier}
                 className="text-[12px] font-semibold text-[#0a6ed1] hover:bg-[#d9ecff] px-2 py-1 rounded transition-colors cursor-pointer"
               >
@@ -674,10 +722,13 @@ export default function PurchaseOrder() {
     setSelectedPlants(prev => prev.includes(plant) ? prev.filter(p => p !== plant) : [...prev, plant])
   }, [])
 
+  // Create ASN works on CONFIRMED items only (the Create ASN page re-reads ZP_PO_CONFIRM / ZP_PUR_ASN_ITEM itself)
   const handleCreateAsn = async () => {
-    if (!agreement) return
+    if (!agreement || asnDisabled(agreement)) return
     const poNum = agreement.poNo || agreement.id
-    const eligibleItems = (agreement.items || []).filter(isConfirmedItem)
+    const eligibleItems = (agreement.items || []).filter(
+      i => i.status === 'Confirmed' || i.status === 'Partially Confirmed'
+    )
     try {
       const pdirRefs = await purchaseOrderApi.getPdirRefs(poNum)
       navigate('/create-asn', { state: { agreement: { ...agreement, poNo: poNum, items: eligibleItems }, pdirRefs } })
@@ -689,6 +740,7 @@ export default function PurchaseOrder() {
 
   const handleConfirm = () => setShowConfirmView(true)
 
+  // Re-fetches the PO detail from SAP, which recomputes statuses and the Create ASN button state
   const handleConfirmSuccess = () => {
     setShowConfirmView(false)
     const id = selectedAgreementId
@@ -910,7 +962,7 @@ export default function PurchaseOrder() {
 
                               <td className="py-3.5 px-4 text-[#32363a]">{item.hsnCode || '—'}</td>
 
-                              <td className="py-3.5 px-4 text-[#32363a] font-medium">{item.storageLocation || 'RM02'}</td>
+                              <td className="py-3.5 px-4 text-[#32363a] font-medium">{item.storageLocation || '—'}</td>
 
                               <td className="py-3.5 px-4">
                                 <span className="font-bold text-[#1f2937]">{item.poQty}</span>{' '}
@@ -951,16 +1003,19 @@ export default function PurchaseOrder() {
                   {/* Footer actions — Always visible, no role gating */}
                   <div className="px-4 sm:px-6 lg:px-10 py-4 border-t border-[#e5e5e5] flex items-center justify-between gap-3 flex-shrink-0 bg-white shadow-[0_-2px_8px_rgba(0,0,0,0.04)]">
                     <div className="relative group">
-                      <button onClick={asnDisabled(agreement.items) ? undefined : handleCreateAsn}
-                        className={`flex items-center gap-2 px-4 sm:px-5 h-11 text-[14px] font-semibold text-[#0a6ed1] bg-[#ebf5ff] border border-[#0a6ed1] rounded-lg transition-all select-none ${asnDisabled(agreement.items) ? 'opacity-45 cursor-not-allowed grayscale-[0.3]' : 'hover:bg-[#d9ecff] hover:scale-[1.02] active:scale-[0.98]'}`}>
+                      <button onClick={asnDisabled(agreement) ? undefined : handleCreateAsn}
+                        disabled={asnDisabled(agreement)}
+                        className={`flex items-center gap-2 px-4 sm:px-5 h-11 text-[14px] font-semibold text-[#0a6ed1] bg-[#ebf5ff] border border-[#0a6ed1] rounded-lg transition-all select-none ${asnDisabled(agreement) ? 'opacity-45 cursor-not-allowed grayscale-[0.3]' : 'hover:bg-[#d9ecff] hover:scale-[1.02] active:scale-[0.98]'}`}>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                           <path d="M12 5v14M5 12h14"/>
                         </svg>
                         Create ASN
                       </button>
-                      {asnDisabled(agreement.items) && (
+                      {asnDisabled(agreement) && (
                         <div className="absolute bottom-full left-0 mb-2 px-3 py-1.5 bg-[#32363a] text-white text-[12px] rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg">
-                          Confirm at least one item before creating ASN
+                          {agreement.asnStateUnavailable
+                            ? 'Could not read confirmation status from SAP'
+                            : 'No confirmed items available for ASN creation'}
                           <div className="absolute top-full left-4 border-4 border-transparent border-t-[#32363a]"/>
                         </div>
                       )}

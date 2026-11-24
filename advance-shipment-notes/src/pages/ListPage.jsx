@@ -142,8 +142,13 @@ function SidebarContent({
   asns, loading, error, searchQuery, sidebarCollapsed, selectedAsnId,
   plants, selectedPlants, filterOpen, filterRef,
   onSearchChange, onSelectAsn, onToggleCollapse, onToggleFilter,
-  onTogglePlant, onClearPlants,
+  onTogglePlant, onClearPlants,statuses,
+selectedStatuses,
+onToggleStatus,
+onClearFilters,
 }) {
+  const activeFilterCount =
+  selectedPlants.length + selectedStatuses.length
   return (
     <>
       <div className="px-4 py-3.5 border-b border-[#e4e9f1] flex-shrink-0 bg-white">
@@ -284,16 +289,17 @@ function SidebarContent({
       <div className="border-t border-[#e4e9f1] px-3 py-2 flex items-center justify-between flex-shrink-0 bg-[#fafbfc]" ref={filterRef}>
         <div className="relative">
           <button onClick={onToggleFilter}
-            className={`relative w-8 h-8 flex items-center justify-center rounded-lg transition-all cursor-pointer ${selectedPlants.length > 0 ? 'bg-[#ebf5ff] text-[#0a6ed1]' : 'text-[#0a6ed1] hover:bg-[#f0f7ff]'}`}
+            className={`relative w-8 h-8 flex items-center justify-center rounded-lg transition-all cursor-pointer ${activeFilterCount > 0 > 0 ? 'bg-[#ebf5ff] text-[#0a6ed1]' : 'text-[#0a6ed1] hover:bg-[#f0f7ff]'}`}
             title="Filter by plant">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M3 4h18l-7 9v6l-4-2v-4L3 4z" /></svg>
-            {selectedPlants.length > 0 && (
+            {activeFilterCount > 0 > 0 && (
               <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] bg-[#cc1c14] text-white text-[9.5px] font-bold rounded-full flex items-center justify-center px-1">
-                {selectedPlants.length}
+                {/* {selectedPlants.length} */}
+                {activeFilterCount}
               </span>
             )}
           </button>
-          {filterOpen && (
+          {/* {filterOpen && (
             <div className="absolute bottom-10 left-0 w-60 bg-white border border-[#d9d9d9] rounded-xl shadow-xl z-50 anim-scale">
               <div className="px-3.5 py-2.5 border-b border-[#e4e9f1] flex items-center justify-between">
                 <span className="text-[12.5px] font-bold text-[#16213a]">Filter by Plant</span>
@@ -310,7 +316,67 @@ function SidebarContent({
                 ))}
               </div>
             </div>
-          )}
+          )} */}
+
+{filterOpen && (
+  <div className="absolute bottom-10 left-0 w-60 bg-white border border-[#d9d9d9] rounded-xl shadow-xl z-50 anim-scale">
+
+    {/* Plant filter */}
+    <div className="px-3.5 py-2.5 border-b border-[#e4e9f1] flex items-center justify-between">
+      <span className="text-[12.5px] font-bold text-[#16213a]">Filter by Plant</span>
+      {selectedPlants.length > 0 && (
+        <button onClick={onClearFilters} className="text-[11.5px] font-semibold text-[#0a6ed1] hover:underline cursor-pointer">Clear</button>
+      )}
+    </div>
+
+    <div className="max-h-40 overflow-y-auto py-1">
+      {plants.map((p) => (
+        <label key={p.code} className="flex items-center gap-2.5 px-3.5 py-2 hover:bg-[#f8fafc] cursor-pointer text-[12.5px] transition-colors">
+          <input
+            type="checkbox"
+            checked={selectedPlants.includes(p.code)}
+            onChange={() => onTogglePlant(p.code)}
+            className="accent-[#0a6ed1] w-4 h-4"
+          />
+          <span className="text-[#16213a]">
+            <span className="font-semibold">{p.code}</span> — <span className="text-[#5c6880]">{p.name}</span>
+          </span>
+        </label>
+      ))}
+    </div>
+
+    {/* Status filter */}
+    <div className="px-3.5 py-2.5 border-y border-[#e4e9f1] flex items-center justify-between">
+      <span className="text-[12.5px] font-bold text-[#16213a]">Filter by Status</span>
+      {selectedStatuses.length > 0 && (
+        <button onClick={onClearFilters} className="text-[11.5px] font-semibold text-[#0a6ed1] hover:underline cursor-pointer">Clear</button>
+      )}
+    </div>
+
+    <div className="max-h-40 overflow-y-auto py-1">
+      {statuses.map((status) => (
+        <label key={status} className="flex items-center gap-2.5 px-3.5 py-2 hover:bg-[#f8fafc] cursor-pointer text-[12.5px] transition-colors">
+          <input
+            type="checkbox"
+            checked={selectedStatuses.includes(status)}
+            onChange={() => onToggleStatus(status)}
+            className="accent-[#0a6ed1] w-4 h-4"
+          />
+          <span className="text-[#16213a]">{status}</span>
+        </label>
+      ))}
+    </div>
+
+    {(selectedPlants.length > 0 || selectedStatuses.length > 0) && (
+      <div className="px-3.5 py-2 border-t border-[#e4e9f1]">
+        <button onClick={onClearFilters} className="text-[11.5px] font-semibold text-[#0a6ed1] hover:underline cursor-pointer">
+          Clear All Filters
+        </button>
+      </div>
+    )}
+  </div>
+)}
+
         </div>
         <button onClick={onToggleCollapse}
           className="hidden md:flex w-8 h-8 items-center justify-center rounded-lg text-[#5c6880] hover:text-[#0a6ed1] hover:bg-[#f0f7ff] transition-all cursor-pointer"
@@ -341,6 +407,7 @@ export default function AdvanceShippingNote() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedPlants, setSelectedPlants] = useState([])
   const [filterOpen, setFilterOpen] = useState(false)
+  const [selectedStatuses, setSelectedStatuses] = useState([])
   const [activeTab, setActiveTab] = useState('items')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
@@ -363,12 +430,14 @@ export default function AdvanceShippingNote() {
   useEffect(() => {
     let cancelled = false
     setLoading(true); setError(null)
-    asnApi.listAsns({ search: searchQuery, plants: selectedPlants })
+    // asnApi.listAsns({ search: searchQuery, plants: selectedPlants })
+    asnApi.listAsns({ search: searchQuery })
       .then(data => { if (!cancelled) setAsns(data) })
       .catch(err => { if (!cancelled) setError(err.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [searchQuery, selectedPlants])
+  // }, [searchQuery, selectedPlants])
+  }, [searchQuery])
 
   // ── Auto-select first ASN ───────────────────────────────────
   useEffect(() => {
@@ -414,13 +483,35 @@ export default function AdvanceShippingNote() {
   }, [mobileSidebarOpen])
 
   const plants = useMemo(() => {
+    //changes for filter m
+    
     const map = new Map()
     asns.forEach(a => { if (a.plant) map.set(a.plant, a.plantName) })
     return Array.from(map, ([code, name]) => ({ code, name }))
   }, [asns])
-
+  const statuses = useMemo(() => {
+  return [...new Set(
+    asns.map(a => a.status).filter(Boolean)
+  )].sort()
+}, [asns])
+//filter changes again m
   const togglePlant = (plant) =>
     setSelectedPlants(prev => prev.includes(plant) ? prev.filter(p => p !== plant) : [...prev, plant])
+  const toggleStatus = (status) => {
+  setSelectedStatuses(prev =>
+    prev.includes(status)
+      ? prev.filter(s => s !== status)
+      : [...prev, status]
+  )
+}
+const visibleAsns = useMemo(() => {
+  return asns.filter(a =>
+    (!selectedPlants.length ||
+      selectedPlants.includes(a.plant)) &&
+    (!selectedStatuses.length ||
+      selectedStatuses.includes(a.status))
+  )
+}, [asns, selectedPlants, selectedStatuses])
 
   const handleSelectAsn = (id) => {
     const listItem = asns.find(a => a.id === id)
@@ -527,14 +618,23 @@ export default function AdvanceShippingNote() {
   }
 
   const sidebarProps = {
-    asns, loading, error, searchQuery, sidebarCollapsed, selectedAsnId,
-    plants, selectedPlants, filterOpen, filterRef,
+    // asns, loading, error, searchQuery, sidebarCollapsed, selectedAsnId,
+    // plants, selectedPlants, filterOpen, filterRef,
+    asns: visibleAsns, loading, error, searchQuery,
+sidebarCollapsed, selectedAsnId,
+plants, selectedPlants, statuses, selectedStatuses,
+filterOpen, filterRef,
     onSearchChange: setSearchQuery,
     onSelectAsn: handleSelectAsn,
     onToggleCollapse: () => setSidebarCollapsed(c => !c),
     onToggleFilter: () => setFilterOpen(f => !f),
     onTogglePlant: togglePlant,
-    onClearPlants: () => setSelectedPlants([]),
+    onToggleStatus: toggleStatus,
+onClearFilters: () => {
+  setSelectedPlants([])
+  setSelectedStatuses([])
+},
+    // onClearPlants: () => setSelectedPlants([]),
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -646,7 +746,7 @@ export default function AdvanceShippingNote() {
 
                   {/* 6. IGST */}
                   <td className="py-3.5 px-4 text-[#16213a] whitespace-nowrap font-medium">
-                    {Number(item.igst !== undefined ? item.igst : 2.80).toFixed(2)}
+                    {Number(item.igst !== undefined ? item.igst : 0.00).toFixed(2)}
                   </td>
 
                   {/* 7. CGST */}
@@ -677,7 +777,7 @@ export default function AdvanceShippingNote() {
               </div>
               <div className="flex items-center justify-between px-5 py-2.5 text-[13.5px]">
                 <span className="text-[#5c6880]">IGST:</span>
-                <span className="text-[#16213a] font-bold">{Number(asn.taxSummary?.igst !== undefined ? asn.taxSummary.igst : 2.80).toFixed(2)}</span>
+                <span className="text-[#16213a] font-bold">{Number(asn.taxSummary?.igst !== undefined ? asn.taxSummary.igst : 0.00).toFixed(2)}</span>
               </div>
               <div className="flex items-center justify-between px-5 py-2.5 text-[13.5px]">
                 <span className="text-[#5c6880]">CGST:</span>
@@ -695,7 +795,7 @@ export default function AdvanceShippingNote() {
             <div className="flex items-center justify-between px-5 py-3.5 bg-gradient-to-r from-[#0f2d59] to-[#0a6ed1] text-white">
               <span className="font-bold text-[14px]">Total Amount:</span>
               <span className="font-extrabold text-[17px]">
-                {Number(asn.taxSummary?.totalAmount || ((Number(asn.amount) || 10.00) + 2.80)).toFixed(2)}
+                {Number(asn.taxSummary?.totalAmount || ((Number(asn.amount) || 10.00) + asn.taxSummary.igst)).toFixed(2)}
               </span>
             </div>
           </div>
@@ -828,8 +928,8 @@ export default function AdvanceShippingNote() {
     ? (targetDoc.vendor || (targetDoc.supplierName ? `${targetDoc.supplierName}${targetDoc.supplierCode && !targetDoc.supplierName.includes(targetDoc.supplierCode) ? ` (${targetDoc.supplierCode})` : ''}` : targetDoc.supplierCode || ''))
     : undefined
 
-  const currentLocation = targetDoc?.vendorAddress || targetDoc?.supplierLocation || (targetDoc?.plantName ? `${targetDoc.plantName}${targetDoc.plant && !targetDoc.plantName.includes(targetDoc.plant) ? ` (${targetDoc.plant})` : ''}` : (targetDoc?.plant || undefined))
-
+  // const currentLocation = targetDoc?.vendorAddress || targetDoc?.supplierLocation || (targetDoc?.plantName ? `${targetDoc.plantName}${targetDoc.plant && !targetDoc.plantName.includes(targetDoc.plant) ? ` (${targetDoc.plant})` : ''}` : (targetDoc?.plant || undefined))
+const currentLocation = targetDoc?.vendorAddress || targetDoc?.supplierLocation || undefined
   const handleHeaderBack = () => {
     if (window.history.length > 1) {
       window.history.back()
@@ -958,9 +1058,20 @@ export default function AdvanceShippingNote() {
                         <h2 className="text-[24px] sm:text-[28px] font-extrabold text-[#0f2d59] tracking-tight min-h-[36px]">
                           {asn.displayTitle || asn.asnNum || ''}
                         </h2>
-                        <div className="text-[14px] text-[#5c6880] font-medium mt-1">
+                        {/* <div className="text-[14px] text-[#5c6880] font-medium mt-1">
                           Plant: {asn.plantName || 'Sri City FG'} ({asn.plant || 'SR01'})
-                        </div>
+                        </div> */}
+                        <div className="text-[14px] text-[#5c6880] font-medium mt-1">
+  {/* Plant: {asn.plantName || 'Sri City FG'} ({asn.plant || 'SR01'}) */}
+  Plant: {asn.plantName || asn.plant || '—'}
+  {asn.plantName && asn.plant ? ` (${asn.plant})` : ''}
+</div>
+
+{asn.date && (
+  <div className="text-[13px] text-[#5c6880] font-medium mt-1">
+    Date: {asn.date}
+  </div>
+)}
                       </div>
 
                       <div className="text-right">
@@ -968,7 +1079,7 @@ export default function AdvanceShippingNote() {
                           {Number(asn.amount || 10.00).toFixed(2)}
                         </div>
                         <div className="text-[11px] font-bold text-[#5c6880] tracking-wider uppercase">INR</div>
-                        <div className="text-[13px] text-[#5c6880] font-medium mt-1">{asn.date || 'Nov 05, 2026'}</div>
+                        {/* <div className="text-[13px] text-[#5c6880] font-medium mt-1">{asn.date || 'Nov 05, 2026'}</div> */}
                       </div>
                     </div>
                   </div>

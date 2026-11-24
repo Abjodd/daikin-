@@ -4,12 +4,10 @@
 // and mock fallback for offline development.
 // ═══════════════════════════════════════════════════════════════
 import { findAgreement, PDIR_REF_NOS, delay, sapDateDisplay } from './Mockdata.js'
-import { odataGet, fetchConfirmedItems, q, toSap8, num, sameItem } from './sapOData.js'
+import { odataGet, fetchConfirmedItems, q, toSap8, num, sameItem, postAsnCreate, saveAgreementItems } from './sapOData.js'
 
 const flag = import.meta.env.VITE_USE_MOCK
 export const USE_MOCK = flag ? flag === 'true' : false
-
-const ASN_CREATE_URL = '/sap/bc/http/sap/ZHTTP_ASN_CREATE'
 
 const str = (v) => String(v ?? '').trim()
 const isoToSap8 = (iso) => (iso || '').replace(/-/g, '')
@@ -98,7 +96,7 @@ function buildEligibleItem(a, it, l) {
   }
 }
 
-export function buildAsnPayloadSR({ scheduleNo, header = {}, invoice = {}, items = [] }) {
+export function buildAsnPayloadSR({ scheduleNo, header = {}, invoice = {}, items = [], type = 'A', status = '' })  {
   const companyCode = str(header.companyCode || '1810')
   const supplierCode = str(header.vendorNo || header.vendor || '')
 
@@ -106,6 +104,8 @@ export function buildAsnPayloadSR({ scheduleNo, header = {}, invoice = {}, items
     Invoice:        str(invoice.number),
     Companycode:    companyCode,
     Suppliercode:   supplierCode,
+    Type:           str(type),
+    Status:         str(status),
     Asnnumber:      '',
     Purchaseorder:  str(scheduleNo),
     Plant:          str(header.plant || ''),
@@ -225,13 +225,16 @@ async function getEligibleItemsLive({ scheduleNo, fromDate, toDate, storageLocat
   const [items, lines, confirmedItems] = await Promise.all([
     odataGet('ZCDS_SCHDULEAGR_ITEM', { filter: f }),
     odataGet('ZCDS_SCHEDULEAGR_SCH', { filter: f, orderby: 'ScheduleLineDeliveryDate' }),
-    fetchConfirmedItems(scheduleNo), // Map<itemAsInt, true> from ZP_SCH_AGREEMENT
+    fetchConfirmedItems(scheduleNo, { strict: true }),  // Map<itemAsInt, true> from ZP_SCH_AGREEMENT
   ])
 
   let rows = lines
     .map((l) => {
       const it = items.find((i) => sameItem(i.SchedulingAgreementItem, l.SchedulingAgreementItem))
-      if (!it || !confirmedItems.has(parseInt(it.SchedulingAgreementItem, 10))) return null
+      if (!it) return null
+      const asn = confirmedItems.get(parseInt(it.SchedulingAgreementItem, 10))
+      if (asn === undefined) return null   // not confirmed → never eligible
+      if (asn) return null                 // confirmed AND ASN already created → drop (optional, see below)
       return buildLiveEligibleItem(scheduleNo, it, l)
     })
     .filter(Boolean)
@@ -276,59 +279,28 @@ export const createAsnApi = {
   },
 
   async submitAsn({ scheduleNo, plant, header = {}, invoiceNumber, invoiceDate, invoiceAmount, totalPacking, items }) {
-    if (!USE_MOCK) {
+        if (!USE_MOCK) {
+      const vendor = str(header.vendorNo || header.vendor)
+      const confirmed = await fetchConfirmedItems(scheduleNo, { strict: true })
+      const dup = items.filter((it) => confirmed.has(parseInt(it.ebelp, 10)))
+      if (dup.length) throw new Error(`Item(s) ${dup.map((d) => d.ebelp).join(', ')} already have an ASN. Please reload.`)
+
+      const payload = buildAsnPayloadSR({
+        scheduleNo,
+        header: { ...header, plant: plant || header?.plant },
+        invoice: { number: invoiceNumber, date: invoiceDate, amount: invoiceAmount },
+        items,
+      })
+      const { asnNum, fisYear, raw } = await postAsnCreate(payload)  // failure → no insert
+
       try {
-        const payload = buildAsnPayloadSR({
-          scheduleNo,
-          header: { ...header, plant: plant || header?.plant },
-          invoice: { number: invoiceNumber, date: invoiceDate, amount: invoiceAmount },
-          items,
+        await saveAgreementItems({
+          scheduleNo, vendor, asnNumber: asnNum,
+          rows: items.map((it) => ({ itemNo: it.ebelp, materialNo: it.materialNumber })),
         })
+      } catch (e) { e.fisYear = fisYear; throw e }
 
-        const response = await fetch(ASN_CREATE_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          credentials: 'include',
-          body: JSON.stringify(payload),
-        })
-
-        const responseText = await response.text()
-        let result = {}
-        try {
-          result = responseText ? JSON.parse(responseText) : {}
-        } catch {
-          result = { message: responseText }
-        }
-
-        if (!response.ok) {
-          throw new Error(
-            result?.message ||
-            result?.error?.message?.value ||
-            `ASN creation failed: HTTP ${response.status}`
-          )
-        }
-
-        const data = result?.d || result
-        const asnNum = data.ASNNUMBER || data.Asnnumber || data.AsnNum || data.asnNumber || ''
-        const fisYear = data.FISYEAR || data.FisYear || String(new Date().getFullYear())
-
-        return {
-          asnNum,
-          fisYear,
-          message: `ASN No. ${asnNum}/${fisYear} created successfully`,
-          raw: data,
-        }
-      } catch (err) {
-        console.warn('[Live ASN] Falling back to mock submission:', err.message)
-        if (import.meta.env.DEV) {
-          // fall through to mock below
-        } else {
-          throw err
-        }
-      }
+      return { asnNum, fisYear, message: `ASN No. ${asnNum}/${fisYear} created successfully`, raw }
     }
 
     // MOCK SUBMISSION FALLBACK
@@ -356,6 +328,11 @@ export const createAsnApi = {
   async uploadAttachment(/* asnDraftId, file, kind */) {
     await delay(200)
     return { ok: true }
+  },
+
+    async persistAsn({ scheduleNo, vendor, rows, asnNum, fisYear }) {
+    await saveAgreementItems({ scheduleNo, vendor, rows, asnNumber: asnNum })
+    return { asnNum, fisYear, message: `ASN No. ${asnNum}/${fisYear} created successfully`, raw: {} }
   },
 }
 

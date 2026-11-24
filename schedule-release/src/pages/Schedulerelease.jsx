@@ -31,11 +31,11 @@ const parseDdmmyyyy = (s) => {
   const iso = ddmmyyyyToIso(s)
   return iso ? new Date(iso) : null
 }
-// local-time yyyy-mm-dd (toISOString() is UTC and can be off by a day)
-const toIsoLocal = (d) => {
-  const p = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
+// // local-time yyyy-mm-dd (toISOString() is UTC and can be off by a day)
+// const toIsoLocal = (d) => {
+//   const p = (n) => String(n).padStart(2, '0')
+//   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+// }
 
 // ── date helpers ──
 export const toStandardIso = (s) => {
@@ -308,20 +308,22 @@ function SupplierPopup({ onSubmit, onCancel, canCancel, title = 'Schedule Releas
 // CONFIRM VIEW
 // ═══════════════════════════════════════════════════════════════
 function ConfirmView({ agreement, onBack, onSuccess }) {
-  const today      = toIsoLocal(new Date())
-  const defaultTo  = toIsoLocal(new Date(Date.now() + 40 * 24 * 60 * 60 * 1000))
+  
 
-  const [fromDate,        setFromDate]        = useState(today)
-  const [toDate,          setToDate]          = useState(defaultTo)
+  const [fromDate,        setFromDate]        = useState('')
+  const [toDate,          setToDate]          = useState('')
   const [storageLocation, setStorageLocation] = useState('')
   const [materialFilter,  setMaterialFilter]  = useState('')
   const [rows,            setRows]            = useState([])
   const [loading,         setLoading]         = useState(false)
+  const submitLock = useRef(false)
   const [error,           setError]           = useState(null)
   const [selected,        setSelected]        = useState(new Set())
   const [submitting,      setSubmitting]      = useState(false)
   const [submitted,       setSubmitted]       = useState(false)
   const [confirmModal,    setConfirmModal]    = useState(false)
+  const [asnNumber, setAsnNumber] = useState('')
+  const [recovery,  setRecovery]  = useState(null)
 
   const fetchData = async (fDate, tDate, sloc) => {
     setLoading(true); setError(null)
@@ -342,18 +344,13 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
   }
 
   // Auto-fetch on mount
-  useEffect(() => {
-    fetchData(today, defaultTo, '')
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchData('', '', '') }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleGo = () => fetchData(fromDate, toDate, storageLocation)
 
   const handleClear = () => {
-    setFromDate(today)
-    setToDate(defaultTo)
-    setStorageLocation('')
-    setMaterialFilter('')
-    fetchData(today, defaultTo, '')
+    setFromDate(''); setToDate(''); setStorageLocation(''); setMaterialFilter('')
+    fetchData('', '', '')
   }
 
   // Filter by material (client-side)
@@ -387,26 +384,30 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
     setSelected(s)
   }
 
-  const handleSubmitClick = () => {
-    if (selected.size === 0) return
+    const handleSubmitClick = () => {
+    if (selected.size === 0 && !recovery) return
     setConfirmModal(true)
   }
 
   const handleSubmit = async () => {
-    setConfirmModal(false)
-    setSubmitting(true)
+    if (submitLock.current) return
+    submitLock.current = true
+    setConfirmModal(false); setSubmitting(true); setError(null)
     try {
-      const selectedRows = filteredRows.filter((r, idx) => selected.has(String(idx)) && !r.alreadyConfirmed)
-      await scheduleReleaseApi.submitConfirm(agreement.id, selectedRows)
-      // Immediately mark rows in local state as alreadyConfirmed
-      setRows(prev => prev.map((r, idx) => selected.has(String(idx)) ? { ...r, alreadyConfirmed: true, confirmedQty: r.requiredQty, confkey: 'X' } : r))
+      const result = recovery
+        ? await scheduleReleaseApi.retryPersist(agreement.id, recovery)
+        : await scheduleReleaseApi.submitConfirm(
+            agreement.id,
+            filteredRows.filter((r, idx) => selected.has(String(idx)) && !r.alreadyConfirmed),
+          )
+      setRecovery(null)
+      setAsnNumber(result?.asnNum ? `${result.asnNum}${result.fisYear ? '/' + result.fisYear : ''}` : '')
       setSelected(new Set())
-      setSubmitted(true)
+      setSubmitted(true)      // shown only after ASN + table insert both succeeded
     } catch (e) {
+      if (e.asnNumber) setRecovery({ asnNum: e.asnNumber, fisYear: e.fisYear, vendor: e.vendor, rows: e.remaining })
       setError(e.message)
-    } finally {
-      setSubmitting(false)
-    }
+    } finally { submitLock.current = false; setSubmitting(false) }
   }
 
   // Success screen — clicking "Back" triggers parent re-fetch via onSuccess

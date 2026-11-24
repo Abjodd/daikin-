@@ -7,11 +7,15 @@
 export const SR_SERVICE = import.meta.env.VITE_SR_ODATA_SERVICE || '/sap/opu/odata/sap/ZSB_SCHEDULEAGREEMENT'
 
 // Entity set for ZP_SCH_AGREEMENTType (key: Schagreement, Schagreementitem, Vendor, Material; field: Status)
-export const ZP_SCH = 'ZP_SCH_AGREEMENT'
+export const ZP_SCH_ENTITY = 'ZP_SCH_AGREEMENT'   // OData entity set: read + POST
+export const ZP_SCHT = ZP_SCH_ENTITY 
+export const ASN_CREATE_URL = '/sap/bc/http/sap/ZHTTP_ASN_CREATE'
+
+const WITH_ASN_FIELD = import.meta.env.VITE_ZP_ASN_FIELD !== 'false'
 
 // Value written to Status on confirm. Change if ABAP expects something else ('X', 'C', ...)
-export const CONFIRMED_STATUS = 'CONFIRMED'
-const CONFIRMED_VALUES = [CONFIRMED_STATUS, 'X', 'C', 'CONFIRMED']
+export const CONFIRMED_STATUS = 'CF'
+const CONFIRMED_VALUES = [CONFIRMED_STATUS, 'X', 'C', 'CONFIRMED','CF','CONF']
 
 const pad = (n) => String(n).padStart(2, '0')
 
@@ -99,17 +103,22 @@ export async function odataPost(entitySet, body, retry = true) {
 
 // ── Confirmation status (item level, from ZP_SCH_AGREEMENT) ─
 /** Returns Map<itemNumberAsInt, true> for items that are confirmed. Never throws. */
-export async function fetchConfirmedItems(agreementId) {
+/** Map<itemAsInt, asnNumber|true> for items confirmed (with an ASN) in ZP_SCH_AGREEMENT.
+ *  strict=true → throws on read failure (required wherever "unconfirmed" gates ASN creation). */
+export async function fetchConfirmedItems(agreementId, { strict = false } = {}) {
   const confirmed = new Map()
   try {
-    const rows = await odataGet(ZP_SCH, { filter: `Schagreement eq ${q(agreementId)}` })
+    const rows = await odataGet(ZP_SCH_ENTITY, { filter: `Schagreement eq ${q(agreementId)}` })
     rows.forEach((r) => {
-      if (CONFIRMED_VALUES.includes(str(r.Status).toUpperCase())) {
-        confirmed.set(parseInt(r.Schagreementitem, 10), true)
-      }
+      if (!CONFIRMED_VALUES.includes(str(r.Status).toUpperCase())) return
+      const asn = str(r.Asnnumber)
+      // If the backend exposes Asnnumber, a row without one is still pending
+      if ('Asnnumber' in r && !asn) return
+      confirmed.set(parseInt(r.Schagreementitem, 10), asn || true)
     })
   } catch (e) {
-    console.warn(`[SAP] Could not read ${ZP_SCH} (items shown as unconfirmed):`, e.message)
+    if (strict) throw e
+    console.warn(`[SAP] Could not read ${ZP_SCH_ENTITY} (items shown as unconfirmed):`, e.message)
   }
   return confirmed
 }
@@ -144,3 +153,69 @@ export const sameItem = (a, b) => parseInt(a, 10) === parseInt(b, 10)
 
 /** Schagreementitem is MaxLength 4 → "00010" / "10" → "0010" */
 export const item4 = (v) => String(parseInt(v, 10) || 0).padStart(4, '0')
+// ── ASN creation (custom HTTP service) ──────────────────────
+/** POST to ZHTTP_ASN_CREATE. Throws unless SAP returns a real ASN number. */
+export async function postAsnCreate(payload, { requireAsn = true } = {}) {
+  const res = await fetch(ASN_CREATE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  })
+  if ((res.headers.get('content-type') || '').includes('text/html')) {
+    throw new Error('Your SAP session has expired — please reload the page to sign in again.')
+  }
+  const text = await res.text()
+  let result = {}
+  try { result = text ? JSON.parse(text) : {} } catch { result = { message: text } }
+  const data = result?.d || result
+
+  if (!res.ok) {
+    throw new Error(result?.message || result?.error?.message?.value || `ASN creation failed: HTTP ${res.status}`)
+  }
+  const msgType = str(data.TYPE || data.Type || data.type).toUpperCase()
+  if (msgType === 'E' || data.error) {
+    throw new Error(str(data.MESSAGE || data.Message || data.message) || 'SAP request failed')
+  }
+
+  const asnNum = str(data.ASNNUMBER || data.Asnnumber || data.AsnNum || data.asnNumber)
+  if (requireAsn && !asnNum) throw new Error('SAP did not return an ASN number — nothing was saved.')
+
+  const status = str(data.STATUS || data.Status || data.status || data?.head?.Status).toUpperCase()
+  const fisYear = str(data.FISYEAR || data.FisYear) || String(new Date().getFullYear())
+  return { asnNum, fisYear, status, message: str(data.MESSAGE || data.Message || data.message), raw: data }
+}
+
+// ── Persist to ZP_SCH_AGREEMENT (shared by Confirm + Create ASN) ──
+/** rows: [{ itemNo, materialNo }]. One POST per unique item. Only call AFTER postAsnCreate succeeded.
+ *  On failure throws an Error carrying { asnNumber, vendor, remaining } so the caller can retry
+ *  the save WITHOUT creating a second ASN. */
+export async function saveAgreementItems({ scheduleNo, vendor, rows, asnNumber, confirmType = 'CS' }) {
+  if (!vendor) throw Object.assign(new Error(`Vendor missing — ASN ${asnNumber} was created but not saved.`),
+    { asnNumber, vendor, remaining: rows })
+  const byItem = new Map()
+  rows.forEach((r) => { const k = parseInt(r.itemNo, 10); if (!byItem.has(k)) byItem.set(k, r) })
+  const pending = [...byItem.values()]
+  const done = new Set()
+
+  for (const r of pending) {
+    try {
+      await odataPost(ZP_SCH_ENTITY, {
+        Schagreement: scheduleNo,
+        Schagreementitem: item4(r.itemNo),
+        Vendor: vendor,
+        Material: r.materialNo,
+        Type: confirmType,
+        Status: CONFIRMED_STATUS,
+        ...(WITH_ASN_FIELD ? { Asnnumber: asnNumber } : {}),
+      })
+      done.add(r)
+    } catch (e) {
+      throw Object.assign(
+        new Error(`ASN ${asnNumber} was created in SAP, but saving item ${r.itemNo} to ${ZP_SCH_ENTITY} failed: ${e.message}`),
+        { asnNumber, vendor, remaining: pending.filter((p) => !done.has(p)) },
+      )
+    }
+  }
+  return done.size
+}

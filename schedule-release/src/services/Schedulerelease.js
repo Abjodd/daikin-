@@ -12,9 +12,10 @@
 import { mockScheduleReleaseApi } from './SchedulereleaseMock.js'
 import { sapDateDisplay } from './Mockdata.js'
 import {
-  odataGet, odataPost, fetchConfirmedItems, ZP_SCH, CONFIRMED_STATUS,
+  odataGet, odataPost, fetchConfirmedItems, postAsnCreate, ZP_SCH_ENTITY,
   q, toSap8, num, str, sameItem, item4,
 } from './sapOData.js'
+import { buildAsnPayloadSR } from './Createasnsch.js'
 
 const flag = import.meta.env.VITE_USE_MOCK
 export const USE_MOCK = flag ? flag === 'true' : import.meta.env.DEV
@@ -106,6 +107,8 @@ function mapConfirmRow(agreementId, it, l, vendorNo, isConfirmed) {
     storageLocation: str(it.StorageLocation),
     requiredQty: qty,
     confirmedQty: isConfirmed ? qty : 0,
+    plant: str(it.Plant),
+    unitPrice: num(it.NetPriceAmount),
     asnQty: 0,
     deliveryDate: sapDateDisplay(date),
     deliveryDateRaw: date,
@@ -117,7 +120,9 @@ function mapConfirmRow(agreementId, it, l, vendorNo, isConfirmed) {
     alreadyConfirmed: isConfirmed,
   }
 }
-
+const CONFIRM_TYPE = 'CS'               // value sent in head.Type
+const CONFIRM_REQ_STATUS = ''         // value sent in head.Status
+const CONFIRM_OK = ['CF', 'CONF'] 
 // ── live API ────────────────────────────────────────────────
 const liveApi = {
   async fetchAllSuppliers() {
@@ -227,36 +232,77 @@ const liveApi = {
   },
 
   // ZP_SCH_AGREEMENT is item-level (no schedule line), so one POST per unique item.
-  async submitConfirm(scheduleNo, selectedRows) {
+    // Sequence: (0) backend re-check → (1) POST ZHTTP_ASN_CREATE → (2) read ASN → (3) insert ZP_SCH_AGREEMENT
+    async submitConfirm(scheduleNo, selectedRows) {
     if (!scheduleNo || scheduleNo === 'undefined') throw new Error('No schedule number provided')
     if (!selectedRows?.length) throw new Error('No lines selected')
 
-    // Vendor is a key field; fall back to the header if a row lacks it
-    let fallbackVendor = ''
-    if (selectedRows.some((r) => !r.vendorNo)) {
-      const h = await odataGet(HEAD, { filter: `SchedulingAgreement eq ${q(scheduleNo)}`, select: 'Supplier' })
-      fallbackVendor = str(h[0]?.Supplier)
-    }
+    const heads = await odataGet(HEAD, {
+      filter: `SchedulingAgreement eq ${q(scheduleNo)}`, select: 'Supplier,CompanyCode',
+    })
+    const vendor = str(heads[0]?.Supplier)
+    const companyCode = str(heads[0]?.CompanyCode)
 
+    // backend re-check so confirmed items are never re-sent
+    const already = await fetchConfirmedItems(scheduleNo, { strict: true })
     const byItem = new Map()
     selectedRows.forEach((r) => {
-      const key = String(parseInt(r.itemNo, 10))
-      if (!byItem.has(key)) byItem.set(key, r)
+      const k = parseInt(r.itemNo, 10)
+      if (!byItem.has(k) && !already.has(k)) byItem.set(k, r)
+    })
+    const rows = [...byItem.values()]
+    if (!rows.length) throw new Error('Selected items are already confirmed. Please refresh.')
+
+    // 1) HTTP request: same payload as Create ASN, plus Type and Status in head
+    const payload = buildAsnPayloadSR({
+      scheduleNo,
+      type: CONFIRM_TYPE,
+      status: CONFIRM_REQ_STATUS,
+      header: { companyCode, vendorNo: vendor, plant: rows[0].plant },
+      invoice: {},
+      items: rows.map((r) => ({
+        ebelp: r.itemNo,
+        schLine: String(parseInt(r.scheduleLine, 10) || 1),
+        materialNumber: r.materialNo,
+        materialName: r.materialDesc,
+        shipmentDateIso: r.deliveryDateRaw,
+        storageLocation: r.storageLocation,
+        totalQty: String(r.requiredQty),
+        confQty: String(r.requiredQty),
+        avlAsnQty: String(r.requiredQty),
+        asnCreated: '0',
+        deliveredQty: '0',
+        netPrice: String(r.unitPrice || 0),
+        supplierNetPrice: String(r.unitPrice || 0),
+      })),
     })
 
+    const { status, message } = await postAsnCreate(payload, { requireAsn: false })
+
+    // 2) Only CF / CONF from SAP allows the table write
+    if (!CONFIRM_OK.includes(status)) {
+      throw new Error(message || `SAP did not confirm the items (status: ${status || 'empty'}). Nothing was saved.`)
+    }
+
+    // 3) Post the same data to ZP_SCH_AGREEMENT (one row per item)
     const results = []
-    for (const r of byItem.values()) {
-      results.push(
-        await odataPost(ZP_SCH, {
-          Schagreement: scheduleNo,
-          Schagreementitem: item4(r.itemNo),
-          Vendor: r.vendorNo || fallbackVendor,
-          Material: r.materialNo,
-          Status: CONFIRMED_STATUS,
-        }),
-      )
+    for (const r of rows) {
+      results.push(await odataPost(ZP_SCH_ENTITY, {
+        Schagreement: scheduleNo,
+        Schagreementitem: item4(r.itemNo),
+        Vendor: vendor,
+        Material: r.materialNo,
+        Type: payload.head.Type,
+        Status: status,
+      }))
     }
     return results
+  },
+
+  // ASN already exists, only the table write is outstanding
+  async retryPersist(scheduleNo, { vendor, rows, asnNum, fisYear }) {
+    await saveAgreementItems({ scheduleNo, vendor, rows, asnNumber: asnNum })
+    return { asnNum, fisYear }
   },
 }
 

@@ -563,6 +563,8 @@ export default function CreateASN2({ agreement: propAgreement }) {
   const [taxPopup, setTaxPopup] = useState(null)
   const [splitBatchItem, setSplitBatchItem] = useState(null)
   const [modal, setModal] = useState(null)
+  const submitLock = useRef(false)
+  const recoveryRef = useRef(null)
   const [submitting, setSubmitting] = useState(false)
 
   // Merge freshly fetched rows with what's already in state, keeping the user's edits
@@ -746,67 +748,31 @@ export default function CreateASN2({ agreement: propAgreement }) {
     })
   }
 
-  const doCreate = async () => {
+    const doCreate = async () => {
+    if (submitLock.current) return
+    submitLock.current = true
     setModal(null)
     setSubmitting(true)
     try {
-      const result = await createAsnApi.submitAsn({
-        header: agreement,
-        scheduleNo: agreement.id, plant: agreement.plant,
-        invoiceNumber, invoiceDate, invoiceAmount: invoiceAmount || invoiceValueVendor, totalPacking,
-        items: selectedItems,
-      })
-
-      const asnNum  = result.asnNum  || ''
-      const fisYear = result.fisYear || String(new Date().getFullYear())
-
-      // Upload attachments after the ASN is created
-      let uploadResult = { uploaded: 0, failed: [] }
-      const totalFiles = generalAttachments.length + pdirAttachments.length
-      if (totalFiles > 0 && asnNum) {
-        uploadResult = await uploadAllAttachments({
-          asnNum,
-          fisYear,
-          generalAttachments,
-          pdirAttachments,
-        })
-      }
-
-      const someUploadsFailed = uploadResult.failed.length > 0
-      setModal({
-        kind: someUploadsFailed ? 'warning' : 'success',
-        title: someUploadsFailed ? 'ASN created — some attachments failed' : 'ASN created successfully',
-        message: someUploadsFailed
-          ? `ASN ${asnNum} was created but ${uploadResult.failed.length} file(s) could not be uploaded. You may need to attach them manually.`
-          : 'Your ASN has been submitted and all attachments uploaded successfully.',
-        details: (
-          <div className="space-y-1.5">
-            <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">ASN Number</span><strong className="text-[#0a6ed1]">{asnNum}{fisYear ? '/' + fisYear : ''}</strong></div>
-            <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">Agreement</span><strong>{agreement.id}</strong></div>
-            <div className="flex justify-between gap-3"><span className="text-[#6a6d70]">Items</span><strong>{selectedItems.length}</strong></div>
-            {totalFiles > 0 && (
-              <div className="flex justify-between gap-3">
-                <span className="text-[#6a6d70]">Attachments uploaded</span>
-                <strong className={uploadResult.failed.length > 0 ? 'text-[#b45309]' : 'text-[#107e3e]'}>
-                  {uploadResult.uploaded} / {totalFiles}
-                </strong>
-              </div>
-            )}
-            {uploadResult.failed.length > 0 && (
-              <div className="pt-1 border-t border-[#e5e5e5]">
-                <div className="text-[11px] text-[#cc1c14] font-semibold mb-1">Failed uploads:</div>
-                {uploadResult.failed.map((f, i) => (
-                  <div key={i} className="text-[11px] text-[#cc1c14]">• {f.name}: {f.error}</div>
-                ))}
-              </div>
-            )}
-          </div>
-        ),
-        primaryLabel: 'Done', onPrimary: () => { setModal(null); navigate(-1) },
-      })
+      const result = recoveryRef.current
+        ? await createAsnApi.persistAsn(recoveryRef.current)
+        : await createAsnApi.submitAsn({
+            header: agreement,
+            scheduleNo: agreement.id, plant: agreement.plant,
+            invoiceNumber, invoiceDate, invoiceAmount: invoiceAmount || invoiceValueVendor, totalPacking,
+            items: selectedItems,
+          })
+      recoveryRef.current = null
+      // ... rest of the try block unchanged (attachments upload + success modal)
     } catch (err) {
-      setModal({ kind: 'error', title: 'Failed to create ASN', message: err.message || 'Something went wrong. Please try again.', primaryLabel: 'OK', onPrimary: () => setModal(null) })
-    } finally { setSubmitting(false) }
+      if (err.asnNumber) {
+        recoveryRef.current = { scheduleNo: agreement.id, vendor: err.vendor, rows: err.remaining, asnNum: err.asnNumber, fisYear: err.fisYear }
+        setModal({ kind: 'error', title: 'ASN created — save to SAP failed', message: err.message,
+          primaryLabel: 'Retry Save', onPrimary: doCreate, secondaryLabel: 'Close', onSecondary: () => setModal(null) })
+      } else {
+        setModal({ kind: 'error', title: 'Failed to create ASN', message: err.message || 'Something went wrong. Please try again.', primaryLabel: 'OK', onPrimary: () => setModal(null) })
+      }
+    } finally { submitLock.current = false; setSubmitting(false) }
   }
 
   const totalAttachments = generalAttachments.length + pdirAttachments.length

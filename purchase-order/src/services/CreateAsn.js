@@ -1,9 +1,10 @@
 /**
  * Create ASN Service
- * GET calls use the ZCDS_* views. Only lines already confirmed in ZP_PO_CONFIRM are offered.
+ * GET calls use the ZCDS_* views. Only lines that are CONFIRMED (present in ZP_PO_CONFIRM)
+ * and not yet fully covered by earlier ASNs (ZP_PUR_ASN_ITEM) are offered.
  * Set USE_MOCK to false once live SAP OData service is connected.
  */
-import { fetchConfirmedMap, isLineConfirmed } from './PurchaseOrder.js'
+import { fetchConfirmedMap, fetchAsnCreatedMap, getEligibleAsnLines } from './PurchaseOrder.js'
 
 export const USE_MOCK = false
 
@@ -16,7 +17,6 @@ const getHeaders = () => ({
 const num = (v) => Number(String(v ?? '').trim() || 0)
 const str = (v) => String(v ?? '').trim()
 const stripZeros = (v) => str(v).replace(/^0+/, '')
-const lineKey = (item, sch) => `${stripZeros(item)}-${stripZeros(sch) || '1'}`
 
 // Accepts '/Date(ms)/', 'YYYYMMDD' or 'YYYY-MM-DD' and returns 'YYYY-MM-DD' (or '')
 export function sapDateToIso(v) {
@@ -241,50 +241,22 @@ export const createAsnService = {
 
     const poFilter = encodeURIComponent(`PurchaseOrder eq '${poNo}'`)
 
-    const asnFilter = encodeURIComponent(`Purchaseorder eq '${poNo}'`)
-
-    const [headers, poItems, schs, confirmedMap, asnItems] = await Promise.all([
+    const [headers, poItems, schs, confirmedMap, createdMap] = await Promise.all([
       getResults(`${ODATA_BASE}/ZCDS_PURCHASE_HEADER?$filter=${poFilter}&$format=json`).catch(() => []),
       getResults(`${ODATA_BASE}/ZCDS_PURCHASEITEM?$filter=${poFilter}&$format=json`),
       getResults(`${ODATA_BASE}/ZCDS_PURCHASEITEM_SCH?$filter=${poFilter}&$format=json`).catch(() => []),
-      fetchConfirmedMap(poNo),
-      // Required: if this fails we must not show full quantities again
-      getResults(`${ODATA_BASE}/ZP_PUR_ASN_ITEM?$filter=${asnFilter}&$format=json`),
+      // Strict: if the status read fails we must show an error, not guess which lines are confirmed
+      fetchConfirmedMap(poNo, { strict: true }),
+      // Required: if this fails we must not show full quantities again (qty already on earlier ASNs)
+      fetchAsnCreatedMap(poNo),
     ])
-
-    // Qty already shipped on earlier ASNs, per PO item + schedule line
-    const createdMap = new Map()
-    for (const r of asnItems) {
-      const k = lineKey(r.Poitem, r.Scheduleitem)
-      createdMap.set(k, (createdMap.get(k) || 0) + num(r.Asnavlqty))
-    }
 
     const header = headers[0] ? mapHeader(headers[0]) : mapHeader({ PurchaseOrder: poNo })
 
-    // One candidate per schedule line; if there are none, one per PO item.
-    const lines = schs.length > 0
-      ? schs
-      : poItems.map(p => ({ PurchaseOrderItem: p.PurchaseOrderItem, PurchaseOrderScheduleLine: '' }))
-
-    const rows = []
-    for (const sch of lines) {
-      const it = poItems.find(p => stripZeros(p.PurchaseOrderItem) === stripZeros(sch.PurchaseOrderItem))
-      if (!it) continue
-
-      // Only confirmed lines can be used for an ASN
-      if (!isLineConfirmed(confirmedMap, it.PurchaseOrderItem, it.Material, sch.PurchaseOrderScheduleLine)) continue
-
-      const orderQty = str(sch.ScheduleLineOrderQuantity || it.OrderQuantity || '0.00')
-      const committed = num(sch.ScheduleLineCommittedQuantity)
-      // Confirmation is status based (no quantity is stored), so a confirmed line counts in full
-      const confQty = committed > 0 ? str(sch.ScheduleLineCommittedQuantity) : orderQty
-
-      // Fully covered by earlier ASNs: don't show this line
-      const created = createdMap.get(lineKey(it.PurchaseOrderItem, sch.PurchaseOrderScheduleLine)) || 0
-      const avlQty = Math.max(0, num(confQty) - created)
-      if (avlQty <= 0) continue
-
-      rows.push(
+    // ONLY lines confirmed in ZP_PO_CONFIRM and not yet fully covered by earlier ASNs
+    // (same helper that drives the Create ASN button on the PO page).
+    const rows = getEligibleAsnLines({ poItems, schs, confirmedMap, createdMap }).map(
+      ({ it, sch, orderQty, confQty, created, avlQty }) =>
         mapItem({
           Poitem: it.PurchaseOrderItem,
           Scheduleitem: sch.PurchaseOrderScheduleLine,
@@ -297,13 +269,15 @@ export const createAsnService = {
           Storageloc: it.StorageLocation,
           Shipmentdate: sch.ScheduleLineDeliveryDate,
           Hsn_Code: it.CommodityCode,
+          // Per-unit tax amounts from ZCDS_PURCHASEITEM (lowercase cgst / sgst / igst)
+          Cgst: it.cgst,
+          Sgst: it.sgst,
+          Igst: it.igst,
           Meins: it.PurchaseOrderQuantityUnit,
           Asncreatedqty: created.toFixed(3),
           Asnavlqty: String(Number(avlQty.toFixed(3))),
         })
-      )
-      
-    }
+    )
 
     return { header, items: finalizeItems(rows) }
   },

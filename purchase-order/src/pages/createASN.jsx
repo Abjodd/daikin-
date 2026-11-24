@@ -41,6 +41,26 @@ const isQtyInvalid = (it) => {
   return !(q > 0) || isQtyExceeded(it)
 }
 
+// ─── TAX RULES ──────────────────────────────────────────────────
+// SAP (ZCDS_PURCHASEITEM cgst / sgst / igst) gives the tax PER UNIT (e.g. 0.9 on a unit price of 10 = 9%).
+// Line tax = per-unit tax x Avl. ASN Qty. Item total = line value + CGST + SGST + IGST.
+// Used by the Tax Breakdown popup AND the auto-populated Invoice Amount so they always agree.
+const getTax = (it) => {
+  const qty = parseFloat(it.avlAsnQty) || 0
+  const unitPrice = parseFloat(it.netPrice) || 0
+  const base = qty * (parseFloat(it.supplierNetPrice || it.netPrice) || 0)
+  const part = (perUnit) => {
+    const u = Number(perUnit) || 0
+    return { amt: u * qty, pct: unitPrice > 0 ? (u / unitPrice) * 100 : 0 }
+  }
+  const igst = part(it.igst)
+  const cgst = part(it.cgst)
+  const sgst = part(it.sgst)
+  const totalTax = igst.amt + cgst.amt + sgst.amt
+  return { base, igst, cgst, sgst, totalTax, itemTotal: base + totalTax }
+}
+const fmtPct = (p) => Number(p.toFixed(2))
+
 // ─── TAX MISMATCH SWITCH (NO EMOJIS) ─────────────────────────────
 function TaxMismatchSwitch({ value, onChange }) {
   return (
@@ -98,17 +118,7 @@ function TaxBreakdownPopup({ item, rect, onClose }) {
     }
   }, [onClose])
 
-  const qty = parseFloat(item.avlAsnQty || 1)
-  const price = parseFloat(item.supplierNetPrice || item.netPrice || 0)
-  const baseValue = qty * price
-
-  const igstPer = parseFloat(item.igstPer ?? 0)
-  const cgstPer = parseFloat(item.cgstPer ?? 9)
-  const sgstPer = parseFloat(item.sgstPer ?? 9)
-
-  const igstAmt = item.igst && Number(item.igst) > 0 ? Number(item.igst) : (baseValue * igstPer / 100)
-  const cgstAmt = item.cgst && Number(item.cgst) > 0 ? Number(item.cgst) : (baseValue * cgstPer / 100)
-  const sgstAmt = item.sgst && Number(item.sgst) > 0 ? Number(item.sgst) : (baseValue * sgstPer / 100)
+  const tax = getTax(item)
 
   // Calculate viewport position directly above button (or below if near top)
   const spaceAbove = rect ? rect.top : 200
@@ -152,15 +162,15 @@ function TaxBreakdownPopup({ item, rect, onClose }) {
         <tbody>
           <tr className="border-b border-[#f1f5f9] font-medium text-[#1e293b]">
             <td className="py-2.5 px-2.5 font-bold text-[#0a6ed1]">{item.hsnCode || item.hsn || '84159000'}</td>
-            <td className="py-2.5 px-2.5">{igstAmt.toFixed(2)} ({igstPer}%)</td>
-            <td className="py-2.5 px-2.5">{cgstAmt.toFixed(2)} ({cgstPer}%)</td>
-            <td className="py-2.5 px-2.5">{sgstAmt.toFixed(2)} ({sgstPer}%)</td>
+            <td className="py-2.5 px-2.5">{tax.igst.amt.toFixed(2)} ({fmtPct(tax.igst.pct)}%)</td>
+            <td className="py-2.5 px-2.5">{tax.cgst.amt.toFixed(2)} ({fmtPct(tax.cgst.pct)}%)</td>
+            <td className="py-2.5 px-2.5">{tax.sgst.amt.toFixed(2)} ({fmtPct(tax.sgst.pct)}%)</td>
           </tr>
         </tbody>
       </table>
       <div className="px-3 py-2 bg-[#f8fafc] flex justify-between items-center text-[11px] text-[#475569]">
-        <span>Total Tax: <strong className="text-[#0f172a]">₹{(igstAmt + cgstAmt + sgstAmt).toFixed(2)}</strong></span>
-        <span>Item Total: <strong className="text-[#0a6ed1]">₹{(baseValue + igstAmt + cgstAmt + sgstAmt).toFixed(2)}</strong></span>
+        <span>Total Tax: <strong className="text-[#0f172a]">₹{tax.totalTax.toFixed(2)}</strong></span>
+        <span>Item Total: <strong className="text-[#0a6ed1]">₹{tax.itemTotal.toFixed(2)}</strong></span>
       </div>
     </div>,
     document.body
@@ -463,8 +473,13 @@ export default function CreateASN() {
   const [submitting, setSubmitting] = useState(false)
   const [successModal, setSuccessModal] = useState(null)
   const [saveWarning, setSaveWarning] = useState(null)
+  // ASN exists in SAP but the ZP_PUR_ASN_HEAD / ZP_PUR_ASN_ITEM write is incomplete:
+  // { asnNum, fisYear, invoice, items, headSaved, itemsSaved, error }
+  const [saveFailed, setSaveFailed] = useState(null)
+  // Synchronous guard against repeated clicks (state updates are async)
+  const inFlight = useRef(false)
 
-  // Fetch ASN data on load
+  // Fetch ASN data on load (only confirmed, not-yet-processed lines are returned)
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -577,21 +592,10 @@ export default function CreateASN() {
     return sum.toFixed(2)
   }, [selectedItems])
 
-  // Auto-populate invoice amount based on selected items + tax formula
+  // Auto-populate Invoice Amount = total invoice value + all taxes (CGST + SGST + IGST) of the selected items
   useEffect(() => {
     if (selectedItems.length > 0) {
-      const totalWithTax = selectedItems.reduce((acc, it) => {
-        const q = parseFloat(it.avlAsnQty || 0)
-        const p = parseFloat(it.supplierNetPrice || it.netPrice || 0)
-        const base = q * p
-        const igstPer = parseFloat(it.igstPer ?? 0)
-        const cgstPer = parseFloat(it.cgstPer ?? 9)
-        const sgstPer = parseFloat(it.sgstPer ?? 9)
-        const igst = it.igst && Number(it.igst) > 0 ? Number(it.igst) : (base * igstPer / 100)
-        const cgst = it.cgst && Number(it.cgst) > 0 ? Number(it.cgst) : (base * cgstPer / 100)
-        const sgst = it.sgst && Number(it.sgst) > 0 ? Number(it.sgst) : (base * sgstPer / 100)
-        return acc + base + igst + cgst + sgst
-      }, 0)
+      const totalWithTax = selectedItems.reduce((acc, it) => acc + getTax(it).itemTotal, 0)
       setInvoiceAmount(totalWithTax.toFixed(2))
     } else {
       setInvoiceAmount('')
@@ -599,7 +603,10 @@ export default function CreateASN() {
   }, [selectedItems])
 
   // Create ASN Submission (Save or Save as Draft)
+  // Order: ZHTTP_ASN_CREATE (STATUS=SUCCESS + ASN number) → ZP_PUR_ASN_HEAD/ITEM → attachments → success dialog.
+  // The lines are already confirmed in ZP_PO_CONFIRM, so nothing is written there from this page.
   const handleSubmitAsn = async (isDraft = false) => {
+    if (inFlight.current) return
     if (selectedRowIds.length === 0) {
       alert('Please select at least one item from the table.')
       return
@@ -618,29 +625,32 @@ export default function CreateASN() {
       return
     }
 
+    // The hardcoded fallback PO must never be used for a live ASN
+    if (!agreementFromState && !location.state?.poNo) {
+      alert('Open this page from a Purchase Order to create an ASN.')
+      return
+    }
+
+    inFlight.current = true
     setSubmitting(true)
     setSaveWarning(null)
+    setSaveFailed(null)
     try {
       const invoice = {
         number: invoiceNumber || 'DRAFT',
         date: invoiceDate,
-        amount: invoiceAmount || invoiceValueVendor,
+        amount: invoiceAmount || invoiceValueVendor,   // incl. taxes
+        value: invoiceValueVendor,                      // total invoice value before tax
       }
 
-      // 1. HTTP service creates the ASN number
+      // 1. ZHTTP_ASN_CREATE — throws on HTTP failure, STATUS != SUCCESS, or a missing ASN number,
+      //    so nothing below runs without a real SAP-generated ASN number
       const res = await postCreateAsn({ poNo, invoice, selectedItems, header })
 
-      // 2. Show the success dialog first
-      setSuccessModal({
-        asnNum: res.AsnNum,
-        poNo: res.Po_No || poNo,
-        invoiceNum: res.InvoiceNum || invoiceNumber,
-        count: selectedItems.length,
-        isDraft,
-      })
-
-      // 3. Persist to ZP_PUR_ASN_HEAD / ZP_PUR_ASN_ITEM (failure must not hide the ASN number)
       const warnings = []
+
+      // 2. Persist to ZP_PUR_ASN_HEAD / ZP_PUR_ASN_ITEM (failure must not hide the ASN number;
+      //    the user gets a retry that never re-creates the ASN)
       try {
         await saveAsnToOData({
           asnNumber: res.AsnNum,
@@ -651,10 +661,18 @@ export default function CreateASN() {
         })
       } catch (odataErr) {
         console.error('[ASN] OData save failed:', odataErr)
-        warnings.push(`Saving ASN details failed: ${odataErr.message}`)
+        setSaveFailed({
+          asnNum: res.AsnNum,
+          fisYear: res.FisYear,
+          invoice,
+          items: selectedItems,
+          headSaved: !!odataErr.headSaved,
+          itemsSaved: odataErr.itemsSaved || 0,
+          error: odataErr.message,
+        })
       }
 
-      // 4. Attachments, in their own try/catch
+      // 3. Attachments, in their own try/catch
       if (generalAttachments.length > 0 || pdirAttachments.length > 0) {
         try {
           await uploadAllAttachments({
@@ -672,9 +690,49 @@ export default function CreateASN() {
       if (warnings.length) {
         setSaveWarning(`ASN ${res.AsnNum} was created, but: ${warnings.join(' | ')}`)
       }
+
+      // 4. Success dialog only after every backend step has run
+      setSuccessModal({
+        asnNum: res.AsnNum,
+        poNo: res.Po_No || poNo,
+        invoiceNum: res.InvoiceNum || invoiceNumber,
+        count: selectedItems.length,
+        isDraft,
+      })
     } catch (err) {
+      // ZHTTP_ASN_CREATE failed (or STATUS was not SUCCESS): nothing was persisted
       alert('Failed to save ASN: ' + err.message)
     } finally {
+      inFlight.current = false
+      setSubmitting(false)
+    }
+  }
+
+  // Persistence only. Never re-creates the ASN, never re-posts rows that were already saved.
+  const retryAsnSave = async () => {
+    if (!saveFailed || inFlight.current) return
+    inFlight.current = true
+    setSubmitting(true)
+    try {
+      await saveAsnToOData({
+        asnNumber: saveFailed.asnNum,
+        poNo,
+        invoice: saveFailed.invoice,
+        selectedItems: saveFailed.items,
+        header,
+        skipHead: saveFailed.headSaved,
+        startIndex: saveFailed.itemsSaved,
+      })
+      setSaveFailed(null)
+    } catch (e) {
+      setSaveFailed((prev) => ({
+        ...prev,
+        headSaved: prev.headSaved || !!e.headSaved,
+        itemsSaved: Math.max(prev.itemsSaved, e.itemsSaved || 0),
+        error: e.message,
+      }))
+    } finally {
+      inFlight.current = false
       setSubmitting(false)
     }
   }
@@ -1043,7 +1101,7 @@ export default function CreateASN() {
                       <tr>
                         <td colSpan={20} className="py-16 text-center text-[#6b7280]">
                           {items.length === 0
-                            ? 'No items available for ASN creation.'
+                            ? 'No confirmed items available for ASN creation.'
                             : 'No items match the current filters.'}
                         </td>
                       </tr>
@@ -1293,7 +1351,9 @@ export default function CreateASN() {
               </svg>
             </div>
             <h3 className="text-[20px] font-bold text-[#1f2937] mb-1">
-              {successModal.isDraft ? 'Draft Saved Successfully!' : 'ASN Created Successfully!'}
+              {(saveWarning || saveFailed)
+                ? 'ASN created — action needed'
+                : successModal.isDraft ? 'Draft Saved Successfully!' : 'ASN Created Successfully!'}
             </h3>
             <p className="text-[13px] text-[#6b7280] mb-5">
               {successModal.isDraft
@@ -1322,6 +1382,19 @@ export default function CreateASN() {
             {saveWarning && (
               <div className="bg-[#fef3c7] border border-[#fcd34d] text-[#92400e] rounded-lg p-3 text-[12px] text-left mb-4">
                 {saveWarning}
+              </div>
+            )}
+            {saveFailed && (
+              <div className="bg-[#fef3c7] border border-[#fcd34d] text-[#92400e] rounded-lg p-3 text-[12px] text-left mb-4">
+                ASN {saveFailed.asnNum} was created in SAP, but saving its details failed: {saveFailed.error}.
+                Retry — do <strong>not</strong> create the ASN again.
+                <button
+                  onClick={retryAsnSave}
+                  disabled={submitting}
+                  className="mt-2 block h-8 px-3 bg-[#0a6ed1] text-white text-[12px] font-semibold rounded disabled:opacity-50"
+                >
+                  Retry saving
+                </button>
               </div>
             )}
             <button

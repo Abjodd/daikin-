@@ -2,13 +2,19 @@
  * Purchase Order API Service
  * Set USE_MOCK to false once live SAP OData service is connected.
  */
+import { postConfirmPo } from './CreateAsnPost.js'
+
 export const USE_MOCK = false
 
 const BASE = '/sap/opu/odata/sap/ZSB_PURCAHSE'
 
 // Value written to ZP_PO_CONFIRM.Status on confirm (max 10 chars).
 // Check with your backend team what the expected value is.
-const CONFIRM_STATUS = 'CONF'
+const CONFIRM_STATUS = 'CF'
+
+// Set VITE_ZP_PO_CONFIRM_HAS_ASN_FIELDS=true only after the backend exposes these properties on ZP_PO_CONFIRM
+// (an unknown property makes OData V2 reject the POST with 400).
+const ZP_HAS_ASN_FIELDS = import.meta.env.VITE_ZP_PO_CONFIRM_HAS_ASN_FIELDS === 'true'
 
 export function sapDateToDisplay(s) {
   if (!s || s === '00000000') return ''
@@ -57,6 +63,8 @@ function trimNum(s) {
 }
 
 const str = (v) => String(v ?? '').trim()
+const num = (v) => Number(String(v ?? '').trim() || 0)
+const stripZeros = (v) => str(v).replace(/^0+/, '')
 
 // ZP_PO_CONFIRM.Purchaseorderitem is MaxLength 4 (e.g. '0010'), while the
 // other CDS views use 5 characters ('00010').
@@ -83,8 +91,9 @@ export const isLineConfirmed = (map, item, material, sched = '') =>
   map.has(confirmKey(item, material, sched)) || map.has(confirmKey(item, material, ''))
 
 // Returns Map<confirmKey, Status> for the rows already present in ZP_PO_CONFIRM for this PO.
+// strict=true → a failed read throws, so action screens never show confirmed lines as pending again.
 // (odataGet is a function declaration below, so it is hoisted and safe to call here.)
-export async function fetchConfirmedMap(poNo) {
+export async function fetchConfirmedMap(poNo, { strict = false } = {}) {
   try {
     const data = await odataGet(
       `/ZP_PO_CONFIRM?$filter=${encodeURIComponent(`Purchaseorder eq '${poNo}'`)}&$format=json`
@@ -96,9 +105,133 @@ export async function fetchConfirmedMap(poNo) {
     }
     return map
   } catch (err) {
+    if (strict) throw new Error(`Could not read confirmation status (ZP_PO_CONFIRM): ${err.message}`)
     console.warn('[PurchaseOrder] Could not load confirmations:', err.message)
     return new Map()
   }
+}
+
+// ── ASN processing tracking ─────────────────────────────────────
+export const asnLineKey = (item, sch) => `${stripZeros(item)}-${stripZeros(sch) || '1'}`
+
+// Qty already shipped on earlier ASNs, per PO item + schedule line (persisted in ZP_PUR_ASN_ITEM)
+export async function fetchAsnCreatedMap(poNo) {
+  const data = await odataGet(
+    `/ZP_PUR_ASN_ITEM?$filter=${encodeURIComponent(`Purchaseorder eq '${poNo}'`)}&$format=json`
+  )
+  const map = new Map()
+  for (const r of data?.results || []) {
+    const k = asnLineKey(r.Poitem, r.Scheduleitem)
+    map.set(k, (map.get(k) || 0) + num(r.Asnavlqty))
+  }
+  return map
+}
+
+// Single source of truth: lines that are CONFIRMED in ZP_PO_CONFIRM and still have ASN qty left.
+// Used by both the Create ASN page and the Create ASN button.
+export function getEligibleAsnLines({ poItems, schs, confirmedMap, createdMap }) {
+  const lines = schs.length > 0
+    ? schs
+    : poItems.map(p => ({ PurchaseOrderItem: p.PurchaseOrderItem, PurchaseOrderScheduleLine: '' }))
+  const out = []
+  for (const sch of lines) {
+    const it = poItems.find(p => stripZeros(p.PurchaseOrderItem) === stripZeros(sch.PurchaseOrderItem))
+    if (!it) continue
+    if (!isLineConfirmed(confirmedMap, it.PurchaseOrderItem, it.Material, sch.PurchaseOrderScheduleLine)) continue
+
+    const orderQty = str(sch.ScheduleLineOrderQuantity || it.OrderQuantity || '0.00')
+    const committed = num(sch.ScheduleLineCommittedQuantity)
+    const confQty = committed > 0 ? str(sch.ScheduleLineCommittedQuantity) : orderQty
+    const created = createdMap.get(asnLineKey(it.PurchaseOrderItem, sch.PurchaseOrderScheduleLine)) || 0
+    const avlQty = Math.max(0, num(confQty) - created)
+    if (avlQty <= 0) continue          // already fully processed
+    out.push({ it, sch, orderQty, confQty, created, avlQty })
+  }
+  return out
+}
+
+// ── ZP_PO_CONFIRM writer (used by the Confirm page) ──
+let csrfCache = ''
+async function fetchCsrf(force = false) {
+  if (csrfCache && !force) return csrfCache
+  const res = await fetch(`${BASE}/`, {
+    method: 'GET',
+    headers: { 'X-CSRF-Token': 'Fetch', Accept: 'application/json' },
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error(`Could not fetch CSRF token: ${res.status}`)
+  csrfCache = res.headers.get('x-csrf-token') || ''
+  if (!csrfCache) throw new Error('CSRF token was not returned by SAP')
+  return csrfCache
+}
+
+async function postConfirmRow(payload, retry = true) {
+  const token = await fetchCsrf()
+  const res = await fetch(`${BASE}/ZP_PO_CONFIRM`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': token },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  })
+  if (res.status === 403 && retry) {            // token expired → refetch once
+    csrfCache = ''
+    await fetchCsrf(true)
+    return postConfirmRow(payload, false)
+  }
+  if (!res.ok) {
+    let detail = '', code = ''
+    try {
+      const j = await res.json()
+      code = j?.error?.code || ''
+      detail = j?.error?.message?.value || JSON.stringify(j)
+    } catch { detail = `HTTP ${res.status}` }
+    if (code === 'MC_CSP_USR_RUNTIME/006') return { skipped: true }   // already confirmed in backend
+    throw new Error(`Confirm failed for item ${payload.Purchaseorderitem} (${res.status}): ${detail}`)
+  }
+  return res.status === 204 ? {} : (await res.json()).d
+}
+
+/**
+ * ZP_PO_CONFIRM persistence.
+ * Call ONLY after ZHTTP_ASN_CREATE (type CP) succeeded (STATUS = SUCCESS). One POST per unique item + material.
+ * rows: [{ itemNo, scheduleLine, materialNo, vendorNo, qty, uom, confirmType? }]
+ * Returns { saved, failed:[{ itemNo, error, rows }] } and never throws per item.
+ */
+export async function persistConfirmation(poNo, rows, { asnNum = '', fisYear = '', vendorNo = '' } = {}) {
+  const groups = new Map()
+  rows.forEach(r => {
+    const sched = CONFIRM_SCHEDULE_FIELD ? schNo(r.scheduleLine) : ''
+    const k = `${toItem4(r.itemNo)}|${str(r.materialNo)}|${sched}`
+    if (!groups.has(k)) groups.set(k, [])
+    groups.get(k).push(r)
+  })
+
+  const saved = []
+  const failed = []
+  for (const group of groups.values()) {
+    const r = group[0]
+    const payload = {
+      Purchaseorder: poNo,
+      Purchaseorderitem: toItem4(r.itemNo),
+      Vendor: str(r.vendorNo || vendorNo),
+      Material: str(r.materialNo),
+      Status: CONFIRM_STATUS,
+    }
+    if (CONFIRM_SCHEDULE_FIELD) payload[CONFIRM_SCHEDULE_FIELD] = schNo(r.scheduleLine)
+    if (ZP_HAS_ASN_FIELDS) {
+      payload.Asnnumber = asnNum
+      payload.Asnyear = fisYear
+      payload.Confirmedqty = String(group.reduce((s, x) => s + (parseFloat(x.qty) || 0), 0))
+      payload.Uom = r.uom || ''
+    }
+    try {
+      await postConfirmRow(payload)
+      saved.push(payload.Purchaseorderitem)
+    } catch (e) {
+      failed.push({ itemNo: payload.Purchaseorderitem, error: e.message, rows: group })
+    }
+  }
+  return { saved, failed }
 }
 
 // Dashboard status of one PO item, from how many of its schedule lines are confirmed.
@@ -763,7 +896,10 @@ function mapConfirmRow(raw) {
     dispDateDisplay: sapDateToDisplay(raw.DispDate),
     shipDate:        str(raw.ShipDate),
     shipDateDisplay: sapDateToDisplay(raw.ShipDate),
+    shipDateIso:     sapDateToIso(raw.ShipDate),
     storageBin:      str(raw.StorageBin),
+    netPrice:        str(raw.Net_Price),
+    uom:             str(raw.Uom),
     alreadyConfirmed: !!raw.alreadyConfirmed,
   }
 }
@@ -804,7 +940,6 @@ function mapPdirRef(raw) {
     refDate: raw.Shipmentdate ? sapDateToDisplay(raw.Shipmentdate) : sapDateToDisplay(raw.Pdir_Ref_Date),
   }
 }
-const ASN_CREATE_URL = '/sap/bc/http/sap/ZHTTP_ASN_CREATE'
 
 export const purchaseOrderApi = {
   async fetchAllSuppliers() {
@@ -958,7 +1093,7 @@ export const purchaseOrderApi = {
       }
     }
 
-    const [headerRes, itemRes, schRes, confirmedMap] = await Promise.all([
+    const [headerRes, itemRes, schRes, confirmedMapRaw, createdMapRaw] = await Promise.all([
       fetch(
         `${BASE}/ZCDS_PURCHASE_HEADER?$filter=${encodeURIComponent(`PurchaseOrder eq '${poNo}'`)}&$format=json`,
         {
@@ -989,7 +1124,9 @@ export const purchaseOrderApi = {
         }
       ),
 
-      fetchConfirmedMap(poNo),
+      // null (not an empty map) when the read fails, so a failed read is never mistaken for "nothing confirmed"
+      fetchConfirmedMap(poNo, { strict: true }).catch(() => null),
+      fetchAsnCreatedMap(poNo).catch(() => null),
     ])
 
     if (!headerRes.ok || !itemRes.ok) {
@@ -1007,8 +1144,26 @@ export const purchaseOrderApi = {
 
     // Schedule lines are optional here: if the call fails, status falls back to item level
     const schJson = schRes.ok ? await schRes.json() : { d: { results: [] } }
+    const schs = schJson.d?.results || []
+    const poItems = itemJson.d?.results || []
 
-    return mapPoDetail(header, itemJson.d?.results || [], confirmedMap, schJson.d?.results || [])
+    const stateUnavailable = !confirmedMapRaw || !createdMapRaw
+
+    const detail = mapPoDetail(header, poItems, confirmedMapRaw || new Map(), schs)
+
+    // Drives the Create ASN button: number of CONFIRMED lines that still have ASN qty left,
+    // computed from persisted SAP data (ZP_PO_CONFIRM + ZP_PUR_ASN_ITEM), not from frontend state.
+    detail.asnStateUnavailable = stateUnavailable
+    detail.eligibleAsnCount = stateUnavailable
+      ? 0
+      : getEligibleAsnLines({
+          poItems,
+          schs,
+          confirmedMap: confirmedMapRaw,
+          createdMap: createdMapRaw,
+        }).length
+
+    return detail
   },
 
   async getLineItems(poNo, ebelp) {
@@ -1107,7 +1262,8 @@ export const purchaseOrderApi = {
           headers: { Accept: 'application/json' },
           credentials: 'include',
         }),
-        fetchConfirmedMap(poNo),
+        // Strict: a failed status read must surface as an error, not as "nothing confirmed"
+        fetchConfirmedMap(poNo, { strict: true }),
       ])
 
       const itemJson = itemRes.ok ? await itemRes.json() : { d: { results: [] } }
@@ -1121,6 +1277,7 @@ export const purchaseOrderApi = {
         return []
       }
 
+      // No date filter is applied here: all lines of the PO are returned.
       const rows = []
       if (schs.length > 0) {
         for (const sch of schs) {
@@ -1157,6 +1314,8 @@ export const purchaseOrderApi = {
               DispDate: sch.ScheduleLineDeliveryDate ? sapODataDate(sch.ScheduleLineDeliveryDate) : '',
               ShipDate: sch.ScheduleLineDeliveryDate ? sapODataDate(sch.ScheduleLineDeliveryDate) : '',
               StorageBin: matchingItem.StorageLocation || '',
+              Net_Price: str(matchingItem.NetPriceAmount || ''),
+              Uom: str(sch.PurchaseOrderQuantityUnit || matchingItem.PurchaseOrderQuantityUnit || ''),
               alreadyConfirmed: isLineConfirmed(
                 confirmedMap,
                 sch.PurchaseOrderItem || matchingItem.PurchaseOrderItem,
@@ -1184,12 +1343,14 @@ export const purchaseOrderApi = {
               DispDate: '',
               ShipDate: '',
               StorageBin: it.StorageLocation || '',
+              Net_Price: str(it.NetPriceAmount || ''),
+              Uom: str(it.PurchaseOrderQuantityUnit || ''),
               alreadyConfirmed: isLineConfirmed(confirmedMap, it.PurchaseOrderItem, it.Material, ''),
             })
           )
         }
       }
-      // Confirmed lines are not offered for confirmation again
+      // Confirmed lines (persisted in ZP_PO_CONFIRM) are not offered for confirmation again
       return rows.filter(r => !r.alreadyConfirmed)
     } catch (err) {
       // Do not fall back to mock rows on a live failure: surface the error to the UI
@@ -1199,116 +1360,70 @@ export const purchaseOrderApi = {
   },
 
   /**
-   * Confirms the selected PO items.
-   *
-   * ZP_PO_CONFIRM exposes only: Purchaseorder, Purchaseorderitem (4 chars),
-   * Vendor, Material and Status, and has no navigation property. So we send
-   * one POST per selected item using exactly those property names.
-   *
-   * NOTE: quantity / date / storage bin cannot be sent with this entity.
-   * They need extra fields in the CDS projection or a separate entity/action.
-   * Errors are thrown instead of being reported as a simulated success.
-   * A duplicate-key error (already confirmed in the backend) is skipped.
+   * Confirm = 1) ZHTTP_ASN_CREATE with Type 'CP' (STATUS must be SUCCESS)  2) ZP_PO_CONFIRM.
+   * An ASN number is optional for a confirmation.
+   * resume = { asnNum, fisYear } → skip step 1 and only (re)persist (used after a partial failure).
+   * Returns { asnNum, fisYear, failed, confirmedCount }. Throws if step 1 fails (nothing is persisted then).
    */
-  
-  async submitConfirm(poNo, selectedRows, vendorNo = '') {
+  async submitConfirm(poNo, selectedRows, vendorNo = '', header = {}, resume = null) {
     if (USE_MOCK) {
       await new Promise(r => setTimeout(r, 400))
-      return { success: true }
+      return { asnNum: '', fisYear: '', failed: [], confirmedCount: selectedRows?.length || 0 }
     }
 
     if (!poNo || poNo === 'undefined') throw new Error('No PO number provided')
     if (!selectedRows || selectedRows.length === 0) throw new Error('No rows selected to confirm')
 
-    // 1) Fetch CSRF token
-    const csrfRes = await fetch(`${BASE}/`, {
-      method: 'GET',
-      headers: {
-        'X-CSRF-Token': 'Fetch',
-        Accept: 'application/json',
-      },
-      credentials: 'include',
-    })
-    if (!csrfRes.ok) {
-      throw new Error(`Could not fetch CSRF token: ${csrfRes.status}`)
-    }
-    const token = csrfRes.headers.get('X-CSRF-Token') || ''
+    const vendor = str(vendorNo || header.vendorNo)
 
-    // 2) One POST per unique item (no deep insert / nav property in metadata).
-    //    The confirm screen has one row per schedule line, so dedupe by item + material.
-    const results = []
-    const seen = new Set()
-    for (const row of selectedRows) {
-      // Without a schedule-line field on ZP_PO_CONFIRM the key is item + vendor + material,
-      // so several schedule lines of one item can only be posted once.
-      const sched = CONFIRM_SCHEDULE_FIELD ? schNo(row.scheduleLine) : ''
-      const dedupeKey = `${toItem4(row.itemNo)}|${str(row.materialNo)}|${sched}`
-      if (seen.has(dedupeKey)) continue
-      seen.add(dedupeKey)
-
-      // const payload = {
-      //   Purchaseorder: poNo,
-      //   Purchaseorderitem: toItem4(row.itemNo),
-      //   Vendor: str(vendorNo || row.vendorNo),
-      //   Material: str(row.materialNo),
-      //   Status: CONFIRM_STATUS,
-      // }
-      const CONFIRM_TYPE = 'AB'
-
-      const payload = {
-        Purchaseorder: poNo,
-        Purchaseorderitem: toItem4(row.itemNo),
-        Vendor: str(vendorNo || row.vendorNo),
-        Material: str(row.materialNo),
-        Type: str(row.confirmType || CONFIRM_TYPE),
-        Status: CONFIRM_STATUS,
+    if (!resume) {
+      // Duplicate guard: re-read persisted state so a second tab/session cannot confirm the same lines again
+      const confirmedNow = await fetchConfirmedMap(poNo, { strict: true })
+      selectedRows = selectedRows.filter(
+        r => !isLineConfirmed(confirmedNow, r.itemNo, r.materialNo, r.scheduleLine)
+      )
+      if (selectedRows.length === 0) {
+        throw new Error('The selected line(s) are already confirmed in SAP. Refresh the list.')
       }
+    }
 
-
-      // Adjust the padding/format to whatever the backend field expects
-      if (CONFIRM_SCHEDULE_FIELD) payload[CONFIRM_SCHEDULE_FIELD] = sched
-
-      // const res = await fetch(`${BASE}/ZP_PO_CONFIRM`, {
-      //   method: 'POST',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     Accept: 'application/json',
-      //     'X-CSRF-Token': token,
-      //   },
-      //   credentials: 'include',
-      //   body: JSON.stringify(payload),
-      // })
-        const res = await fetch(ASN_CREATE_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          // 'X-CSRF-Token': csrfToken,
-        },
-        credentials: 'include',
-        body: JSON.stringify(payload),
+    let asn = resume
+    if (!asn) {
+      // Throws on any failure (HTTP error or STATUS != SUCCESS) → no ZP_PO_CONFIRM insert
+      const res = await postConfirmPo({
+        poNo,
+        header: { ...header, vendorNo: vendor },
+        selectedItems: selectedRows.map(r => ({
+          itemNo: r.itemNo,
+          schLine: r.scheduleLine,
+          materialNumber: r.materialNo,
+          materialName: r.materialDesc,
+          shipmentDateIso: r.shipDateIso,
+          storageLocation: r.storageBin,
+          totalQty: r.poQty,
+          confQty: r.poQty,
+          deliveredQty: r.delQty || '0.00',
+          asnCreated: '0.00',
+          avlAsnQty: r.poQty,
+          netPrice: r.netPrice || '0.00',
+        })),
       })
-
-      if (!res.ok) {
-        let detail = '', code = ''
-        try {
-          const errJson = await res.json()
-          code = errJson?.error?.code || ''
-          detail = errJson?.error?.message?.value || JSON.stringify(errJson)
-        } catch {
-          detail = await res.text().catch(() => '')
-        }
-        // Already confirmed in backend: not a failure, just skip
-        if (code === 'MC_CSP_USR_RUNTIME/006') {
-          results.push({ success: true, skipped: true })
-          continue
-        }
-        throw new Error(`Confirm failed for item ${payload.Purchaseorderitem} (${res.status}): ${detail}`)
-      }
-
-      results.push(res.status === 204 ? { success: true } : await res.json())
+      asn = { asnNum: res.AsnNum, fisYear: res.FisYear }
     }
 
-    return { success: true, results }
+    // Only reached after ZHTTP_ASN_CREATE (type CP) returned STATUS = SUCCESS
+    const { failed } = await persistConfirmation(
+      poNo,
+      selectedRows.map(r => ({
+        itemNo: r.itemNo,
+        scheduleLine: r.scheduleLine,
+        materialNo: r.materialNo,
+        vendorNo: r.vendorNo || vendor,
+        qty: r.poQty ?? r.qty,        // retry rows are already in persist format (qty)
+        uom: r.uom,
+      })),
+      { asnNum: asn.asnNum, fisYear: asn.fisYear, vendorNo: vendor },
+    )
+    return { asnNum: asn.asnNum, fisYear: asn.fisYear, failed, confirmedCount: selectedRows.length }
   },
 }
