@@ -121,6 +121,8 @@ export async function fetchAsnCreatedMap(poNo) {
   )
   const map = new Map()
   for (const r of data?.results || []) {
+    // Skip cancelled or zeroed items so they do not reduce available ASN quantity
+    if (num(r.Asnavlqty) <= 0 || str(r.Iscancel) === 'X' || str(r.Cancel) === 'X') continue
     const k = asnLineKey(r.Poitem, r.Scheduleitem)
     map.set(k, (map.get(k) || 0) + num(r.Asnavlqty))
   }

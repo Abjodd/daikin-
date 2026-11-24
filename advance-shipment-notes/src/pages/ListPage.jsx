@@ -73,7 +73,7 @@ function getStatusBadgeClass(status) {
 // ═══════════════════════════════════════════════════════════════
 // CANCEL DIALOGS
 // ═══════════════════════════════════════════════════════════════
-function CancelConfirmDialog({ asnId, onConfirm, onDismiss, loading }) {
+function CancelConfirmDialog({ asnId, onConfirm, onDismiss, loading, error }) {
   return (
     <div className="fixed inset-0 bg-black/40 z-[100] flex items-center justify-center px-4" onClick={onDismiss}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 anim-scale" onClick={e => e.stopPropagation()}>
@@ -86,9 +86,16 @@ function CancelConfirmDialog({ asnId, onConfirm, onDismiss, loading }) {
           </div>
           <h3 className="text-[16px] font-bold text-[#16213a]">Cancel ASN?</h3>
         </div>
-        <p className="text-[14px] text-[#5c6880] mb-5">
-          ASN <span className="font-semibold text-[#16213a]">{asnId}</span> will be permanently deleted. This action cannot be undone.
+        <p className="text-[14px] text-[#5c6880] mb-4">
+          ASN <span className="font-semibold text-[#16213a]">{asnId}</span> will be permanently cancelled and quantities returned. This action cannot be undone.
         </p>
+
+        {error && (
+          <div className="mb-4 p-3 bg-[#fef2f2] border border-[#fecaca] rounded-lg text-[12px] text-[#cc1c14] leading-relaxed">
+            {error}
+          </div>
+        )}
+
         <div className="flex gap-3">
           <button onClick={onDismiss} disabled={loading}
             className="flex-1 h-9 text-[13px] font-semibold text-[#16213a] border border-[#d9d9d9] rounded-lg hover:bg-[#f5f6f7] transition-all disabled:opacity-50 cursor-pointer">
@@ -414,6 +421,7 @@ export default function AdvanceShippingNote() {
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false)
   const [cancelLoading, setCancelLoading] = useState(false)
   const [cancelSuccessAsn, setCancelSuccessAsn] = useState(null)
+  const [cancelError, setCancelError] = useState(null)
   const [selectedAsnStatus, setSelectedAsnStatus] = useState(null)
   const [printLoading, setPrintLoading] = useState(false)
 
@@ -586,15 +594,22 @@ const visibleAsns = useMemo(() => {
     }
   }
 
-  const handleCancelClick = () => { if (canPerformActions) setCancelDialogOpen(true) }
+  const handleCancelClick = () => {
+    if (canPerformActions) {
+      setCancelError(null)
+      setCancelDialogOpen(true)
+    }
+  }
 
   const handleCancelConfirm = async () => {
     if (!asn) return
     setCancelLoading(true)
+    setCancelError(null)
     try {
       await asnApi.cancelAsn(asn.id)
       const cancelledId = asn.id
-      setCancelDialogOpen(false); setCancelSuccessAsn(cancelledId)
+      setCancelDialogOpen(false)
+      setCancelSuccessAsn(cancelledId)
       const data = await asnApi.listAsns({ search: searchQuery, plants: selectedPlants })
       setAsns(data)
       const updated = await asnApi.getAsn(cancelledId)
@@ -602,12 +617,21 @@ const visibleAsns = useMemo(() => {
         try { updated.attachments = await asnApi.getAttachments(updated.asnNum, updated.fisYear) } catch { updated.attachments = [] }
         setAsn(updated)
       }
-    } catch (err) { console.error(err) }
-    finally { setCancelLoading(false) }
+    } catch (err) {
+      console.error(err)
+      setCancelError(err.message || 'Failed to cancel ASN')
+    } finally {
+      setCancelLoading(false)
+    }
   }
 
   const handleSuccessDismiss = () => setCancelSuccessAsn(null)
-  const handleCancelDismiss = () => { if (!cancelLoading) setCancelDialogOpen(false) }
+  const handleCancelDismiss = () => {
+    if (!cancelLoading) {
+      setCancelDialogOpen(false)
+      setCancelError(null)
+    }
+  }
 
   const handleDownload = async (attachment) => {
     if (downloadingFile === attachment.name) return
@@ -969,7 +993,7 @@ const currentLocation = targetDoc?.vendorAddress || targetDoc?.supplierLocation 
       `}</style>
 
       {cancelDialogOpen && asn && (
-        <CancelConfirmDialog asnId={asn.id} onConfirm={handleCancelConfirm} onDismiss={handleCancelDismiss} loading={cancelLoading} />
+        <CancelConfirmDialog asnId={asn.id} onConfirm={handleCancelConfirm} onDismiss={handleCancelDismiss} loading={cancelLoading} error={cancelError} />
       )}
       {cancelSuccessAsn && (
         <CancelSuccessDialog asnId={cancelSuccessAsn} onDismiss={handleSuccessDismiss} />

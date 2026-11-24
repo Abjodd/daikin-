@@ -777,15 +777,18 @@ if (
   // },
 
 async cancelAsn(id) {
-  const asn = _cachedAsns.get(id)
+  let asn = _cachedAsns.get(id)
 
   if (!asn) {
     throw new Error(`ASN details not found for ${id}`)
   }
 
+  // If companyCode is missing from list view, fallback to standard or fetch
+  const companyCode = str(asn.companyCode)
+
   const keyFields = {
     Invoice: asn.invoice,
-    Companycode: asn.companyCode,
+    Companycode: companyCode,
     Suppliercode: asn.supplierCode,
     Asnnumber: asn.asnNum,
   }
@@ -802,6 +805,7 @@ async cancelAsn(id) {
 
   const csrfToken = await fetchCsrfToken()
 
+  // 1. Cancel ASN Header in ZP_PUR_ASN_HEAD
   const res = await fetch(
     `${ODATA_BASE}/ZP_PUR_ASN_HEAD(${key})`,
     {
@@ -825,6 +829,86 @@ async cancelAsn(id) {
     const errorText = await res.text()
     throw new Error(`ASN cancellation failed (${res.status}): ${errorText}`)
   }
+
+  // 2. Fetch Item records from ZP_PUR_ASN_ITEM to restore quantities back to Available
+  let itemsToUpdate = []
+  if (asn.asnNum) {
+    try {
+      const itemJson = await odataGet(
+        `/ZP_PUR_ASN_ITEM?$filter=${encodeURIComponent(`Asnnumber eq '${asn.asnNum}'`)}&$format=json`
+      )
+      itemsToUpdate = itemJson.d?.results || []
+    } catch (err) {
+      console.warn('[ASN] Could not fetch items by Asnnumber:', err.message)
+    }
+  }
+
+  if (itemsToUpdate.length === 0 && asn.invoice) {
+    try {
+      const itemJson = await odataGet(
+        `/ZP_PUR_ASN_ITEM?$filter=${encodeURIComponent(`Invoice eq '${asn.invoice}'`)}&$format=json`
+      )
+      itemsToUpdate = itemJson.d?.results || []
+    } catch (err) {
+      console.warn('[ASN] Could not fetch items by Invoice:', err.message)
+    }
+  }
+
+  // 3. Loop through each item and MERGE to set Asnavlqty = 0.00 and Iscancel = 'X'
+  for (const rawItem of itemsToUpdate) {
+    let targetPath = ''
+    if (rawItem.__metadata?.uri) {
+      const match = rawItem.__metadata.uri.match(/\/ZP_PUR_ASN_ITEM\(.+\)/)
+      if (match) targetPath = match[0]
+    }
+    if (!targetPath) {
+      const itemKeyParts = [
+        `Companycode='${str(rawItem.Companycode || companyCode).replace(/'/g, "''")}'`,
+        `Suppliercode='${str(rawItem.Suppliercode || asn.supplierCode).replace(/'/g, "''")}'`,
+        `Asnnumber='${str(rawItem.Asnnumber || asn.asnNum).replace(/'/g, "''")}'`,
+        `Asnitem='${str(rawItem.Asnitem || '00010').replace(/'/g, "''")}'`,
+      ]
+      targetPath = `/ZP_PUR_ASN_ITEM(${itemKeyParts.join(',')})`
+    }
+
+    try {
+      const itemRes = await fetch(`${ODATA_BASE}${targetPath}`, {
+        method: 'MERGE',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken,
+          'If-Match': '*',
+          Loginid: authConfig.loginId,
+          Logintype: authConfig.loginType,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          Asnavlqty: '0.00',
+          Asncreatedqty: '0.00'
+        }),
+      })
+
+      if (!itemRes.ok) {
+        const itemErr = await itemRes.text()
+        console.warn(`[ASN] Failed to zero item ${targetPath} (${itemRes.status}):`, itemErr)
+      }
+    } catch (err) {
+      console.warn(`[ASN] Item MERGE error for ${targetPath}:`, err.message)
+    }
+  }
+
+  // 4. Update in-memory cache
+  asn.status = 'Cancelled'
+  asn.statusColor = 'red'
+  asn.isCancel = 'X'
+  if (Array.isArray(asn.items)) {
+    asn.items.forEach(it => {
+      it.asnAvlQty = 0
+      it.asnCreatedQty = 0
+    })
+  }
+  _cachedAsns.set(id, asn)
 
   return { success: true, id }
 },
