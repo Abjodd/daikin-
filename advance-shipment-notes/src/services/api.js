@@ -120,12 +120,33 @@ const sapTime = (v) => {
   return `${s.slice(0, 2)}:${s.slice(2, 4)}:${s.slice(4, 6)}`
 }
 
+// function deriveStatus(d) {
+//   if (d.Cancel === true || str(d.Cancel) === 'X') return { status: 'Cancelled', color: 'red' }
+//   if (str(d.Status)) {
+//     const s = str(d.Status)
+//     return { status: s, color: s.toLowerCase() === 'confirmed' ? 'blue' : 'red' }
+//   }
+//   return { status: 'Confirmed', color: 'green' }
+// }
+
+
 function deriveStatus(d) {
-  if (d.Cancel === true || str(d.Cancel) === 'X') return { status: 'Cancelled', color: 'red' }
+  if (
+    str(d.Iscancel).toUpperCase() === 'X' ||
+    d.Cancel === true ||
+    str(d.Cancel).toUpperCase() === 'X'
+  ) {
+    return { status: 'Cancelled', color: 'red' }
+  }
+
   if (str(d.Status)) {
     const s = str(d.Status)
-    return { status: s, color: s.toLowerCase() === 'confirmed' ? 'blue' : 'red' }
+    return {
+      status: s,
+      color: s.toLowerCase() === 'confirmed' ? 'blue' : 'red'
+    }
   }
+
   return { status: 'Confirmed', color: 'green' }
 }
 
@@ -533,6 +554,34 @@ return rows
           const fresh = mapHeader(headResults[0])
           headerObj = { ...headerObj, ...fresh, id }
         }
+        // Get Company Code, Supplier Name and Supplier Location from PO
+const poNo = headerObj?.purchaseOrder
+
+if (poNo) {
+  const poFilter = encodeURIComponent(`PurchaseOrder eq '${poNo}'`)
+  const poJson = await odataGet(
+    `/ZCDS_PURCHASE_HEADER?$filter=${poFilter}&$format=json`
+  )
+  const po = poJson.d?.results?.[0]
+
+  if (po) {
+    headerObj.companyCode = str(po.CompanyCode)
+    headerObj.companyCodeName = str(po.CompanyCodeName)
+    headerObj.supplierCode = str(po.Supplier)
+    headerObj.supplierName = str(po.SupplierFullName || po.Supplier)
+    headerObj.vendor = headerObj.supplierName
+    headerObj.supplierLocation = str(po.supplieraddress || po.SupplierAddress)
+
+    headerObj.generalData = {
+      ...headerObj.generalData,
+      companyCode: headerObj.companyCode,
+      companyCodeName: headerObj.companyCodeName,
+      supplierCode: headerObj.supplierCode,
+      supplierName: headerObj.supplierName,
+      supplierLocation: headerObj.supplierLocation,
+    }
+  }
+}
 
         // 2. Fetch Items
         const itemFilter = encodeURIComponent(`Asnnumber eq '${rawAsnNum}'`)
@@ -707,25 +756,78 @@ if (
     return { success: true, id }
   },
 
-  async cancelAsn(id) {
-    const csrfToken = await fetchCsrfToken()
-    try {
-      const res = await fetch(`${ODATA_BASE}/ZP_PUR_ASN_HEAD('${id}')`, {
-        method: 'DELETE',
-        headers: {
-          Accept: 'application/json',
-          'X-CSRF-Token': csrfToken,
-          Loginid: authConfig.loginId,
-          Logintype: authConfig.loginType,
-        },
-        credentials: 'include',
-      })
-      if (!res.ok) console.warn('[ASN] Delete returned status:', res.status)
-    } catch (err) {
-      console.warn('[ASN] Cancel API failed:', err)
+  // async cancelAsn(id) {
+  //   const csrfToken = await fetchCsrfToken()
+  //   try {
+  //     const res = await fetch(`${ODATA_BASE}/ZP_PUR_ASN_HEAD('${id}')`, {
+  //       method: 'DELETE',
+  //       headers: {
+  //         Accept: 'application/json',
+  //         'X-CSRF-Token': csrfToken,
+  //         Loginid: authConfig.loginId,
+  //         Logintype: authConfig.loginType,
+  //       },
+  //       credentials: 'include',
+  //     })
+  //     if (!res.ok) console.warn('[ASN] Delete returned status:', res.status)
+  //   } catch (err) {
+  //     console.warn('[ASN] Cancel API failed:', err)
+  //   }
+  //   return { success: true, id }
+  // },
+
+async cancelAsn(id) {
+  const asn = _cachedAsns.get(id)
+
+  if (!asn) {
+    throw new Error(`ASN details not found for ${id}`)
+  }
+
+  const keyFields = {
+    Invoice: asn.invoice,
+    Companycode: asn.companyCode,
+    Suppliercode: asn.supplierCode,
+    Asnnumber: asn.asnNum,
+  }
+
+  if (Object.values(keyFields).some(v => !str(v))) {
+    throw new Error('Missing ASN key fields. Cannot cancel this ASN.')
+  }
+
+  const key = Object.entries(keyFields)
+    .map(([name, value]) =>
+      `${name}='${str(value).replace(/'/g, "''")}'`
+    )
+    .join(',')
+
+  const csrfToken = await fetchCsrfToken()
+
+  const res = await fetch(
+    `${ODATA_BASE}/ZP_PUR_ASN_HEAD(${key})`,
+    {
+      method: 'MERGE',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+        'If-Match': '*',
+        Loginid: authConfig.loginId,
+        Logintype: authConfig.loginType,
+      },
+      credentials: 'include',
+      body: JSON.stringify({
+        Iscancel: 'X',
+      }),
     }
-    return { success: true, id }
-  },
+  )
+
+  if (!res.ok) {
+    const errorText = await res.text()
+    throw new Error(`ASN cancellation failed (${res.status}): ${errorText}`)
+  }
+
+  return { success: true, id }
+},
 }
 
 function decodeContentToBlob(raw, mime = 'application/octet-stream') {
