@@ -221,12 +221,12 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
       const failed = res.failed || []
       await fetchData()                         // re-read persisted state from SAP
       if (failed.length) {
-        setPartial({ asnNum: res.asnNum, fisYear: res.fisYear, failedRows: failed.flatMap(f => f.rows) })
+        setPartial({ asnNum: res.asnNum, fisYear: res.fisYear, message: res.message, failedRows: failed.flatMap(f => f.rows) })
         const asnTxt = res.asnNum ? `ASN ${res.asnNum}${res.fisYear ? '/' + res.fisYear : ''}` : 'The ASN request'
         setError(`${asnTxt} succeeded, but item(s) ${failed.map(f => f.itemNo).join(', ')} could not be saved in SAP (${failed[0].error}). Use "Retry saving" — do not submit again.`)
       } else {
         setPartial(null)
-        setResult({ asnNum: res.asnNum, fisYear: res.fisYear, count: res.confirmedCount ?? rowsToSend.length })
+        setResult({ asnNum: res.asnNum, fisYear: res.fisYear, message: res.message, count: res.confirmedCount ?? rowsToSend.length })
       }
     } catch (e) {
       setError(e.message)                       // ZHTTP failed / STATUS not SUCCESS → nothing was persisted
@@ -242,7 +242,7 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
   }
 
   const handleRetry = () =>
-    partial && runConfirm(partial.failedRows, { asnNum: partial.asnNum, fisYear: partial.fisYear })
+      partial && runConfirm(partial.failedRows, { asnNum: partial.asnNum, fisYear: partial.fisYear, message: partial.message })
 
   return (
     <main className="bg-white anim-fade" style={{ minHeight: 'calc(100vh - 120px)' }}>
@@ -393,7 +393,7 @@ function ConfirmView({ agreement, onBack, onSuccess }) {
                 <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
               </svg>
             </div>
-            <div className="text-[16px] font-semibold text-[#2e7d32]">Confirmed successfully</div>
+            <div className="text-[16px] font-semibold text-[#2e7d32]">{result.message || 'Confirmed successfully'}</div>
             <div className="text-[13.5px] text-[#6a6d70] mt-1">
               {result.asnNum && (
                 <>ASN No. <strong className="text-[#0a6ed1]">{result.asnNum}{result.fisYear ? '/' + result.fisYear : ''}</strong>{' '}</>

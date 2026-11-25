@@ -24,6 +24,8 @@ const getHeaders = () => ({
 })
 
 const str = (v) => String(v ?? '').trim()
+const qtyNum = (v) => parseFloat(v) || 0
+const fmtQty = (n) => String(Number(Math.max(0, n).toFixed(3)))
 
 function toSapDate(v) {
   if (!v) return ''
@@ -39,64 +41,94 @@ function toSapDate(v) {
   }
   return ''
 }
+
 function toODataDate(v) {
-  const s = toSapDate(v)            // 'YYYYMMDD' or ''
+  const s = toSapDate(v) // 'YYYYMMDD' or ''
   if (!s) return null
   return `/Date(${Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8))})/`
 }
 
 /**
  * Builds the head payload (ZP_PUR_ASN_HEAD) and one item payload per selected row (ZP_PUR_ASN_ITEM).
+ * Isdraft = 'X' for drafts. Issaved is NOT sent here: it is set only after all rows were saved
+ * (see saveAsnToOData).
  */
-export function buildAsnPayload({ poNo, invoice, selectedItems, header = {} }) {
+export function buildAsnPayload({ poNo, invoice, selectedItems, header = {}, isDraft = false }) {
   const companyCode = str(header.companyCode || '1000')
   const supplierCode = str(header.vendorNo || header.vendor || '')
+  const plant = str(header.plant || selectedItems[0]?.plant || '')
 
-  // OData-shaped: only properties that exist on ZP_PUR_ASN_HEAD ($metadata): Invoice, Companycode, Suppliercode,
-  // Asnnumber, Purchaseorder, Plant, Invoicedate, Invoiceamount, Invoicevalue, Isactive.
   const head = {
     Invoice:        str(invoice.number),
     Companycode:    companyCode,
     Suppliercode:   supplierCode,
     Asnnumber:      '',
     Purchaseorder:  str(poNo),
-    Plant:          str(header.plant || ''),
+    Plant:          plant,
     Invoicedate:    toODataDate(invoice.date),
     Invoiceamount:  str(invoice.amount),
     Invoicevalue:   str(invoice.value ?? invoice.amount),
+    Isdraft:        isDraft ? 'X' : '',
   }
 
   // Asnnumber is filled in after the head is created
-  const items = selectedItems.map((it, idx) => ({
-    Companycode:         companyCode,
-    Suppliercode:        supplierCode,
-    Asnnumber:           '',
-    Asnitem:             String((idx + 1) * 10).padStart(5, '0'),
-    Purchaseorder:       str(poNo),
-    Poitem:              str(it.itemNo).padStart(5, '0'),
-    Plant:               str(header.plant || ''),
-    Scheduleitem:        str(it.schLine || '1'),
-    Material:            str(it.materialNumber),
-    Materialname:        str(it.materialName),
-    Shipmentdate:        toODataDate(it.shipmentDateIso || it.shipmentDate),
-    Storageloc:          str(it.storageLocation),
-    Poqty:               str(it.totalQty),
-    Confirmedqty:        str(it.confQty || it.avlAsnQty),
-    Deliveredqty:        str(it.deliveredQty || '0.00'),
-    Asncreatedqty:       str(it.asnCreated || '0.00'),
-    Asnavlqty:           str(it.avlAsnQty),
-    Vendorreturnqty:     str(it.vendorReturnQty || '0.00'),
-    Shortgrnqty:         str(it.shortGrnQty || '0.00'),
-    Netprice:            str(it.netPrice),
-    Suppliernetprice:    str(it.supplierNetPrice || it.netPrice),
-    Taxmismatch:         it.taxMismatch ? 'X' : '',
-    Packingmaterialtype: str(it.packingMaterialType),
-    Packingmaterialqty:  str(it.packingMaterialQty || '1'),
-    Spq:                 str(it.spq),
-    Pdirno:              str(it.pdirNo),
-  }))
+  const items = selectedItems.map((it, idx) => {
+    const avl = qtyNum(it.avlAsnQty)
+    const conf = qtyNum(it.confQty || it.avlAsnQty)
+    const created = qtyNum(it.asnCreated)
+    // per-unit SAP tax x Avl. ASN Qty (same as the Tax Breakdown popup)
+    const lineTax = (perUnit) => ((Number(perUnit) || 0) * avl).toFixed(2)
+
+    return {
+      Companycode:         companyCode,
+      Suppliercode:        supplierCode,
+      Asnnumber:           '',
+      Asnitem:             String((idx + 1) * 10).padStart(5, '0'),
+      Purchaseorder:       str(poNo),
+      Poitem:              str(it.itemNo).padStart(5, '0'),
+      Plant:               str(it.plant || plant),
+      Scheduleitem:        str(it.schLine || '1'),
+      Material:            str(it.materialNumber),
+      Materialname:        str(it.materialName),
+      Shipmentdate:        toODataDate(it.shipmentDateIso || it.shipmentDate),
+      Storageloc:          str(it.storageLocation),
+      Poqty:               str(it.totalQty),
+      Confirmedqty:        str(it.confQty || it.avlAsnQty),
+      Deliveredqty:        str(it.deliveredQty || '0.00'),
+      Asncreatedqty:       str(it.asnCreated || '0.00'),
+      Unit:                str(it.totalUnit),
+      Asnavlqty:           str(it.avlAsnQty),
+      // confirmed - (ASN created + Avl. ASN qty)
+      Remainingasnqty:     fmtQty(conf - (created + avl)),
+      Cgst:                lineTax(it.cgst),
+      Sgst:                lineTax(it.sgst),
+      Igst:                lineTax(it.igst),
+      Vendorreturnqty:     str(it.vendorReturnQty || '0.00'),
+      Shortgrnqty:         str(it.shortGrnQty || '0.00'),
+      Netprice:            str(it.netPrice),
+      Suppliernetprice:    str(it.supplierNetPrice || it.netPrice),
+      Taxmismatch:         it.taxMismatch ? 'X' : '',
+      Packingmaterialtype: str(it.packingMaterialType),
+      Packingmaterialqty:  str(it.packingMaterialQty || '1'),
+      Spq:                 str(it.spq),
+      Pdirno:              str(it.pdirNo),
+    }
+  })
 
   return { head, items }
+}
+
+async function readError(res) {
+  let detail = ''
+  try {
+    const errJson = await res.json()
+    detail = errJson?.error?.message?.value || JSON.stringify(errJson)
+  } catch {
+    detail = await res.text().catch(() => '')
+  }
+  const err = new Error(detail || `HTTP ${res.status}`)
+  err.status = res.status
+  return err
 }
 
 async function postJson(url, csrfToken, body) {
@@ -106,22 +138,25 @@ async function postJson(url, csrfToken, body) {
     credentials: 'include',
     body: JSON.stringify(body),
   })
-  if (!res.ok) {
-    let detail = ''
-    try {
-      const errJson = await res.json()
-      detail = errJson?.error?.message?.value || JSON.stringify(errJson)
-    } catch {
-      detail = await res.text().catch(() => '')
-    }
-    const err = new Error(detail || `HTTP ${res.status}`)
-    err.status = res.status
-    throw err
-  }
+  if (!res.ok) throw await readError(res)
   if (res.status === 204) return {}
   const json = await res.json()
   return json.d || json
 }
+
+async function patchJson(url, csrfToken, body) {
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: { ...getHeaders(), 'X-CSRF-Token': csrfToken, 'If-Match': '*' },
+    credentials: 'include',
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw await readError(res)
+  return {}
+}
+
+// Escapes a value for use inside an OData key predicate: Key='value'
+const keyVal = (v) => encodeURIComponent(String(v ?? '').replace(/'/g, "''"))
 
 // First non-empty value among several possible property names.
 // Case-insensitive: the HTTP handler returns lowercase keys ("asnnumber", "status", ...).
@@ -134,17 +169,6 @@ const pick = (obj, ...keys) => {
     if (v !== undefined && v !== null && v !== '') return v
   }
   return ''
-}
-
-// Adds each item's line tax amounts (per-unit SAP tax x Avl. ASN Qty),
-// same as the Tax Breakdown popup.
-function withTaxes(items, selectedItems) {
-  return items.map((row, i) => {
-    const it = selectedItems[i] || {}
-    const qty = parseFloat(it.avlAsnQty) || 0
-    const line = (perUnit) => ((Number(perUnit) || 0) * qty).toFixed(2)
-    return { ...row, Cgst: line(it.cgst), Sgst: line(it.sgst), Igst: line(it.igst) }
-  })
 }
 
 /**
@@ -218,6 +242,7 @@ export async function postCreateAsn({
   invoice,
   selectedItems,
   header = {},
+  isDraft = false,
 }) {
   if (USE_MOCK) {
     await new Promise(r => setTimeout(r, 400))
@@ -243,11 +268,12 @@ export async function postCreateAsn({
     invoice,
     selectedItems,
     header,
+    isDraft,
   })
 
   const payload = {
     head: { ...head, Type: ASN_TYPE_CREATE, Status: ASN_HEAD_STATUS },
-    items: withTaxes(items, selectedItems),
+    items,
   }
 
   const { data, sapStatus, asnNumber } = await callAsnHttp(payload, { requireAsnNumber: true })
@@ -296,14 +322,16 @@ export async function postConfirmPo({
 
   const payload = {
     head: { ...head, Type: ASN_TYPE_CONFIRM, Status: ASN_HEAD_STATUS },
-    items: withTaxes(items, selectedItems),
+    items,
   }
 
   const { data, sapStatus, asnNumber } = await callAsnHttp(payload, { requireAsnNumber: false })
+  const message = str(pick(data, 'MESSAGE', 'Message', 'message'))
 
   return {
     ...data,
     Status: sapStatus,
+    Message: message,
     AsnNum: asnNumber,
     FisYear: asnNumber ? (str(pick(data, 'FISYEAR')) || String(new Date().getFullYear())) : '',
     Po_No: str(pick(data, 'PURCHASEORDER')) || poNo,
@@ -328,6 +356,7 @@ async function fetchODataCsrfToken() {
 /**
  * After the HTTP service returns the ASN number, persist the ASN into
  * ZP_PUR_ASN_HEAD (1 call) and ZP_PUR_ASN_ITEM (1 call per selected item).
+ * On a normal save (not a draft) the head is then marked Issaved = 'X'.
  *
  * Resumable: if a save fails part-way, the thrown error carries
  *   e.headSaved  (true once the head row exists) and
@@ -342,6 +371,7 @@ export async function saveAsnToOData({
   header = {},
   skipHead = false,
   startIndex = 0,
+  isDraft = false,
 }) {
   if (USE_MOCK) {
     await new Promise(r => setTimeout(r, 200))
@@ -350,7 +380,7 @@ export async function saveAsnToOData({
   if (!asnNumber) throw new Error('ASN number is missing, cannot post to OData')
 
   // Reuse the same payload builder, then stamp the ASN number from the HTTP service
-  const { head, items } = buildAsnPayload({ poNo, invoice, selectedItems, header })
+  const { head, items } = buildAsnPayload({ poNo, invoice, selectedItems, header, isDraft })
   head.Asnnumber = str(asnNumber)
   const itemPayloads = items.map(it => ({ ...it, Asnnumber: str(asnNumber) }))
 
@@ -371,6 +401,23 @@ export async function saveAsnToOData({
       e.message = `ASN item ${item.Asnitem} (PO item ${item.Poitem}) failed: ${e.message}`
       e.headSaved = true
       e.itemsSaved = i
+      throw e
+    }
+  }
+
+  // 3. Mark the ASN as saved only after the head and every item were written.
+  //    Drafts keep Issaved empty.
+  if (!isDraft) {
+    const headUrl =
+      `${ODATA_BASE}/ZP_PUR_ASN_HEAD(` +
+      `Invoice='${keyVal(head.Invoice)}',Companycode='${keyVal(head.Companycode)}',` +
+      `Suppliercode='${keyVal(head.Suppliercode)}',Asnnumber='${keyVal(head.Asnnumber)}')`
+    try {
+      await patchJson(headUrl, csrfToken, { Issaved: 'X' })
+    } catch (e) {
+      e.message = `ASN ${asnNumber} rows were saved, but marking it as saved failed: ${e.message}`
+      e.headSaved = true
+      e.itemsSaved = itemPayloads.length // retry skips head and items and only repeats this step
       throw e
     }
   }

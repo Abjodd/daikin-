@@ -438,7 +438,7 @@ export default function CreateASN() {
 
   const agreementFromState = location.state?.agreement
   const poNo = agreementFromState?.poNo || agreementFromState?.id || location.state?.poNo || '7000037175'
-  const plantDesc = agreementFromState?.plantDesc || 'Daikin Airconditioning -NMR (NMR)'
+  const plantDesc = agreementFromState?.plantDesc || '-'
 
   // Top circular tab: 'info' | 'attachments'
   const [activeTab, setActiveTab] = useState('info')
@@ -459,6 +459,7 @@ export default function CreateASN() {
   const [pdirRefs, setPdirRefs] = useState([])
   // Selection is tracked by rowId (unique per item + schedule line)
   const [selectedRowIds, setSelectedRowIds] = useState([])
+  const [draftSaved, setDraftSaved] = useState(null)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -605,7 +606,7 @@ export default function CreateASN() {
   // Create ASN Submission (Save or Save as Draft)
   // Order: ZHTTP_ASN_CREATE (STATUS=SUCCESS + ASN number) → ZP_PUR_ASN_HEAD/ITEM → attachments → success dialog.
   // The lines are already confirmed in ZP_PO_CONFIRM, so nothing is written there from this page.
-  const handleSubmitAsn = async (isDraft = false) => {
+    const handleSubmitAsn = async (isDraft = false) => {
     if (inFlight.current) return
     if (selectedRowIds.length === 0) {
       alert('Please select at least one item from the table.')
@@ -625,7 +626,6 @@ export default function CreateASN() {
       return
     }
 
-    // The hardcoded fallback PO must never be used for a live ASN
     if (!agreementFromState && !location.state?.poNo) {
       alert('Open this page from a Purchase Order to create an ASN.')
       return
@@ -639,18 +639,17 @@ export default function CreateASN() {
       const invoice = {
         number: invoiceNumber || 'DRAFT',
         date: invoiceDate,
-        amount: invoiceAmount || invoiceValueVendor,   // incl. taxes
-        value: invoiceValueVendor,                      // total invoice value before tax
+        amount: invoiceAmount || invoiceValueVendor,
+        value: invoiceValueVendor,
       }
 
-      // 1. ZHTTP_ASN_CREATE — throws on HTTP failure, STATUS != SUCCESS, or a missing ASN number,
-      //    so nothing below runs without a real SAP-generated ASN number
-      const res = await postCreateAsn({ poNo, invoice, selectedItems, header })
+      // 1. ZHTTP_ASN_CREATE (Isdraft = 'X' for drafts)
+      const res = await postCreateAsn({ poNo, invoice, selectedItems, header, isDraft })
 
       const warnings = []
 
-      // 2. Persist to ZP_PUR_ASN_HEAD / ZP_PUR_ASN_ITEM (failure must not hide the ASN number;
-      //    the user gets a retry that never re-creates the ASN)
+      // 2. ZP_PUR_ASN_HEAD / ZP_PUR_ASN_ITEM (+ Issaved = 'X' on normal saves)
+      let persistFailed = false
       try {
         await saveAsnToOData({
           asnNumber: res.AsnNum,
@@ -658,21 +657,24 @@ export default function CreateASN() {
           invoice,
           selectedItems,
           header,
+          isDraft,
         })
       } catch (odataErr) {
+        persistFailed = true
         console.error('[ASN] OData save failed:', odataErr)
         setSaveFailed({
           asnNum: res.AsnNum,
           fisYear: res.FisYear,
           invoice,
           items: selectedItems,
+          isDraft,
           headSaved: !!odataErr.headSaved,
           itemsSaved: odataErr.itemsSaved || 0,
           error: odataErr.message,
         })
       }
 
-      // 3. Attachments, in their own try/catch
+      // 3. Attachments
       if (generalAttachments.length > 0 || pdirAttachments.length > 0) {
         try {
           await uploadAllAttachments({
@@ -691,16 +693,19 @@ export default function CreateASN() {
         setSaveWarning(`ASN ${res.AsnNum} was created, but: ${warnings.join(' | ')}`)
       }
 
-      // 4. Success dialog only after every backend step has run
-      setSuccessModal({
-        asnNum: res.AsnNum,
-        poNo: res.Po_No || poNo,
-        invoiceNum: res.InvoiceNum || invoiceNumber,
-        count: selectedItems.length,
-        isDraft,
-      })
+      // 4. A clean draft only turns the button green.
+      //    A normal save, or anything needing attention, opens the dialog.
+      if (isDraft) setDraftSaved({ asnNum: res.AsnNum })
+      if (!isDraft || persistFailed || warnings.length) {
+        setSuccessModal({
+          asnNum: res.AsnNum,
+          poNo: res.Po_No || poNo,
+          invoiceNum: res.InvoiceNum || invoiceNumber,
+          count: selectedItems.length,
+          isDraft,
+        })
+      }
     } catch (err) {
-      // ZHTTP_ASN_CREATE failed (or STATUS was not SUCCESS): nothing was persisted
       alert('Failed to save ASN: ' + err.message)
     } finally {
       inFlight.current = false
@@ -714,12 +719,13 @@ export default function CreateASN() {
     inFlight.current = true
     setSubmitting(true)
     try {
-      await saveAsnToOData({
+        await saveAsnToOData({
         asnNumber: saveFailed.asnNum,
         poNo,
         invoice: saveFailed.invoice,
         selectedItems: saveFailed.items,
         header,
+        isDraft: saveFailed.isDraft,
         skipHead: saveFailed.headSaved,
         startIndex: saveFailed.itemsSaved,
       })
@@ -778,29 +784,39 @@ export default function CreateASN() {
           {/* Action buttons on right (Save as Draft & Save) */}
           <div className="flex items-center gap-2 z-10 ml-auto sm:ml-0">
             <button
-              type="button"
-              onClick={() => handleSubmitAsn(true)}
-              disabled={submitting}
-              className="flex items-center gap-1.5 px-3 h-8 bg-[#fee2e2] text-[#b91c1c] text-[12px] sm:text-[13px] font-bold rounded hover:bg-[#fecaca] transition-all disabled:opacity-50 cursor-pointer"
-            >
+            type="button"
+            onClick={() => handleSubmitAsn(true)}
+            disabled={submitting || !!draftSaved}
+            className={`flex items-center gap-1.5 px-3 h-8 text-[12px] sm:text-[13px] font-bold rounded transition-all ${
+              draftSaved
+                ? 'bg-[#16a34a] text-white cursor-default'
+                : 'bg-[#fee2e2] text-[#b91c1c] hover:bg-[#fecaca] disabled:opacity-50 cursor-pointer'
+            }`}
+          >
+            {draftSaved ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            ) : (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
               </svg>
-              Save as Draft
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSubmitAsn(false)}
-              disabled={submitting}
-              className="flex items-center gap-1.5 px-3.5 h-8 bg-[#0a6ed1] text-white text-[12px] sm:text-[13px] font-bold rounded hover:bg-[#085caf] transition-all shadow-sm disabled:opacity-50 cursor-pointer"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-                <polyline points="17 21 17 13 7 13 7 21" />
-                <polyline points="7 3 7 8 15 8" />
-              </svg>
-              Save
-            </button>
+            )}
+            {draftSaved ? 'Draft Saved' : 'Save as Draft'}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSubmitAsn(false)}
+            disabled={submitting || !!draftSaved}
+            className="flex items-center gap-1.5 px-3.5 h-8 bg-[#0a6ed1] text-white text-[12px] sm:text-[13px] font-bold rounded hover:bg-[#085caf] transition-all shadow-sm disabled:opacity-50 cursor-pointer"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+              <polyline points="17 21 17 13 7 13 7 21" />
+              <polyline points="7 3 7 8 15 8" />
+            </svg>
+            Save
+          </button>
           </div>
         </div>
 
@@ -811,6 +827,14 @@ export default function CreateASN() {
           </h2>
           <div className="text-[12px] sm:text-[13px] text-[#4b5563] mt-0.5">
             Plant :{plantDesc}
+            {draftSaved && (
+              <div className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#15803d]">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                Draft saved — ASN {draftSaved.asnNum}
+              </div>
+            )}
           </div>
         </div>
 
